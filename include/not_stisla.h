@@ -1,5 +1,5 @@
 /**
- * NOT_Competitor - Ultra-High-Performance Search Algorithm for DSMIL
+ * NOT_STISLA - Ultra-High-Performance Search Algorithm for DSMIL
  *
  * DSMIL's proprietary search implementation achieving 22.28x speedup over binary search
  *
@@ -7,11 +7,11 @@
  * Optimized for: Telemetry timelines, Sorted IDs, Segment offsets, Event time-series
  *
  * Architecture: AVX2-optimized for Meteor Lake and modern x86-64 CPUs
- * Note: NOT_Competitor is DSMIL's original implementation, not related to Competitor
+ * Note: NOT_STISLA is DSMIL's original implementation, not related to Competitor
  */
 
-#ifndef NOT_Competitor_H
-#define NOT_Competitor_H
+#ifndef NOT_STISLA_H
+#define NOT_STISLA_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -22,7 +22,7 @@ extern "C" {
 #endif
 
 /**
- * NOT_Competitor Anchor Table - Learns optimal interpolation points
+ * NOT_STISLA Anchor Table - Learns optimal interpolation points
  */
 typedef struct not_stisla_anchor_table not_not_stisla_anchor_table_t;
 
@@ -30,7 +30,7 @@ typedef struct not_stisla_anchor_table not_not_stisla_anchor_table_t;
  * Search result indicating index or not found
  */
 typedef size_t not_not_stisla_result_t;
-#define NOT_Competitor_NOT_FOUND ((not_not_stisla_result_t)-1)
+#define NOT_STISLA_NOT_FOUND ((not_not_stisla_result_t)-1)
 
 /**
  * @brief Create a new Competitor anchor table
@@ -210,19 +210,19 @@ bool stisla_init_for_dsmil(
 );
 
 /* Version information */
-#define NOT_Competitor_VERSION_MAJOR 1
-#define NOT_Competitor_VERSION_MINOR 0
-#define NOT_Competitor_VERSION_PATCH 0
+#define NOT_STISLA_VERSION_MAJOR 1
+#define NOT_STISLA_VERSION_MINOR 0
+#define NOT_STISLA_VERSION_PATCH 0
 
 /**
- * @brief Get NOT_Competitor version string
+ * @brief Get NOT_STISLA version string
  *
  * @return Version string
  */
 const char* not_stisla_version(void);
 
 /**
- * @brief Get NOT_Competitor build information
+ * @brief Get NOT_STISLA build information
  *
  * @return Build info string with CPU optimizations
  */

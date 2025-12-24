@@ -1,8 +1,8 @@
-# NOT_Competitor Complete Integration Guide
+# NOT_STISLA Complete Integration Guide
 
 ## Overview
 
-NOT_Competitor is an ultra-high-performance search algorithm that delivers **22.28× speedup** over binary search through advanced interpolation techniques and AVX2 SIMD optimizations. This guide provides complete integration instructions for incorporating NOT_Competitor into high-performance applications requiring fast sorted data access.
+NOT_STISLA is an ultra-high-performance search algorithm that delivers **22.28× speedup** over binary search through advanced interpolation techniques and AVX2 SIMD optimizations. This guide provides complete integration instructions for incorporating NOT_STISLA into high-performance applications requiring fast sorted data access.
 
 ## Performance Benefits
 
@@ -15,7 +15,7 @@ NOT_Competitor is an ultra-high-performance search algorithm that delivers **22.
 
 ## Quick Start
 
-### 1. Include NOT_Competitor Headers
+### 1. Include NOT_STISLA Headers
 
 ```c
 #include "not_stisla.h"
@@ -73,7 +73,7 @@ size_t find_record(uint64_t* keys, size_t count, uint64_t target_key) {
 }
 ```
 
-**After (NOT_Competitor):**
+**After (NOT_STISLA):**
 ```c
 // Persistent anchor table for database indexes
 static not_stisla_anchor_table_t* index_table = NULL;
@@ -404,7 +404,7 @@ return (result != Competitor_NOT_FOUND) ? (size_t)result : SIZE_MAX;
 
 ## Conclusion
 
-NOT_Competitor integration provides revolutionary performance improvements for search operations:
+NOT_STISLA integration provides revolutionary performance improvements for search operations:
 
 - **22.28× speedup** over binary search
 - **Memory efficient** with adaptive anchor learning

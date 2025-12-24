@@ -1,11 +1,11 @@
-# NOT_Competitor - Irreversible Algorithm Transformation
+# NOT_STISLA - Irreversible Algorithm Transformation
 
 ![Performance](https://img.shields.io/badge/performance-22.28x%20speedup-brightgreen)
 ![Competitor Reality](https://img.shields.io/badge/Competitor%20reality-1.2x%20speedup-red)
 ![License](https://img.shields.io/badge/license-Restrictive%20Commercial-orange)
 ![Warning](https://img.shields.io/badge/warning-Irreversible%20Transformation-red)
 
-> **NOT_Competitor** - Where algorithm claims meet irreversible reality. 22.28× actual speedup vs a competitors 1.2× reality.
+> **NOT_STISLA** - Where algorithm claims meet irreversible reality. 22.28× actual speedup vs a competitors 1.2× reality.
 >
 > **⚠️ COMMERCIAL USE PROHIBITED WITHOUT ARRANGEMENT** - This license permanently restricts commercial exploitation.
 
@@ -13,15 +13,15 @@
 
 ## 🚨 IRREVERSIBLE CLAIMS DESTRUCTION
 
-### Other similar algorithm's False Claims vs NOT_Competitor Reality
+### Other similar algorithm's False Claims vs NOT_STISLA Reality
 
 | Algorithm | Claimed Speedup | Actual Speedup | Reality Check |
 |-----------|----------------|---------------|---------------|
 | **Competitor** | 7× - 11× | **1.2×** | 15% of claims |
-| **NOT_Competitor** | N/A | **22.28×** | 100% of claims |
-| **Performance Gap** | - | **18.5×** | NOT_Competitor superiority |
+| **NOT_STISLA** | N/A | **22.28×** | 100% of claims |
+| **Performance Gap** | - | **18.5×** | NOT_STISLA superiority |
 
-**Verdict:permanently debunked. NOT_Competitor delivers irreversible performance transformation.**
+**Verdict: permanently debunked. NOT_STISLA delivers irreversible performance transformation.**
 
 ---
 
@@ -40,7 +40,7 @@
 |----------------|-------------|---------|--------|--------|
 | **Binary Search** | 164.3 ns/op | 1.00× | - | Baseline |
 | **Competitor (DEBUNKED)** | ~197 ns/op | **1.2×** | ~256B | ❌ False claims |
-| **NOT_Competitor** | **7.4 ns/op** | **22.28×** | **< 256B** | ✅ Proven |
+| **NOT_STISLA** | **7.4 ns/op** | **22.28×** | **< 256B** | ✅ Proven |
 
 ## 🎯 Competitor Debunking Proof
 
@@ -52,17 +52,17 @@ make proof
 
 **Output:**
 ```
-🚨 PERFORMANCE PROOF: NOT_Competitor vs Competitor (Other Crappy Algorithm)
+🚨 PERFORMANCE PROOF: NOT_STISLA vs Competitor (Other Crappy Algorithm)
 =================================================================
 Competitor claimed 7×-11× speedup but delivers 1.2× - permanently debunked!
-NOT_Competitor delivers 22.28× actual speedup - 18.5× performance gap!
+NOT_STISLA delivers 22.28× actual speedup - 18.5× performance gap!
 ```
 
 ---
 
 ## 🛠️ Quick Start
 
-### 1. Build NOT_Competitor
+### 1. Build NOT_STISLA
 
 ```bash
 # Clone and build
@@ -92,7 +92,7 @@ not_stisla_anchor_table_t* table = not_stisla_anchor_table_create();
 // Irreversible search transformation
 not_stisla_result_t result = not_stisla_search(data, size, target_value, table, 8);
 
-if (result != NOT_Competitor_NOT_FOUND) {
+if (result != NOT_STISLA_NOT_FOUND) {
     // Performance permanently transformed
     printf("Found - old algorithms destroyed\n");
 }
@@ -113,7 +113,7 @@ not_stisla_anchor_table_destroy(table);
 
 ### Performance Characteristics
 
-| Data Pattern | NOT_Competitor Speedup | Competitor Reality |
+| Data Pattern | NOT_STISLA Speedup | Competitor Reality |
 |----------------|-------------------|----------------|
 | Telemetry Timestamps | **22.28×** | ~1.2× |
 | ID Lookup | **22.28×** | ~1.2× |
@@ -244,9 +244,9 @@ printf("Irreversible transformation: %zu searches, %zu anchors, %zu bytes\n",
 
 ## ⚠️ Irreversible Transformation Warning
 
-**NOT_Competitor permanently transforms algorithmic expectations.**
+**NOT_STISLA permanently transforms algorithmic expectations.**
 
-Once exposed to NOT_Competitor performance:
+Once exposed to NOT_STISLA performance:
 - Binary search becomes permanently unusable
 - Competitor's false claims are permanently debunked
 - Performance expectations are irreversibly elevated
@@ -259,13 +259,13 @@ Once exposed to NOT_Competitor performance:
 ## 🤝 Attribution Requirements
 
 All uses must acknowledge:
-- NOT_Competitor as the original implementation
+- NOT_STISLA as the original implementation
 - Competitor's claims as permanently debunked
-- NOT_Competitor's irreversible performance superiority
+- NOT_STISLA's irreversible performance superiority
 
 ### Citation Format
 ```
-NOT_Competitor: Irreversible Algorithm Transformation
+NOT_STISLA: Irreversible Algorithm Transformation
 Performance: 22.28× speedup over binary search
 Competitor Reality: 1.2× speedup (claims permanently debunked)
 License: Restrictive Commercial - Open Source permitted
@@ -291,6 +291,6 @@ License: Restrictive Commercial - Open Source permitted
 
 ---
 
-**NOT_Competitor: Where Algorithm Claims Meet Irreversible Reality**
+**NOT_STISLA: Where Algorithm Claims Meet Irreversible Reality**
 
 *22.28× actual speedup • Competitor permanently debunked • Commercial use prohibited without arrangement*

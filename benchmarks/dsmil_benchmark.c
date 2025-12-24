@@ -1,7 +1,7 @@
 /**
- * DSMIL NOT_Competitor Benchmark Suite
+ * DSMIL NOT_STISLA Benchmark Suite
  *
- * Simple performance verification for NOT_Competitor
+ * Simple performance verification for NOT_STISLA
  */
 
 #include "../include/not_stisla.h"
@@ -44,7 +44,7 @@ static void generate_test_data(int64_t* arr, size_t n) {
 }
 
 int main() {
-    printf("🎯 DSMIL NOT_Competitor Benchmark Suite\n");
+    printf("🎯 DSMIL NOT_STISLA Benchmark Suite\n");
     printf("Version: %s\n", not_stisla_version());
     printf("Build: %s\n", not_stisla_build_info());
     printf("\n");
@@ -66,7 +66,7 @@ int main() {
         queries[i] = data[idx];
     }
 
-    /* Initialize NOT_Competitor */
+    /* Initialize NOT_STISLA */
     not_stisla_anchor_table_t* table = not_stisla_anchor_table_create();
     assert(table && "Failed to create anchor table");
 
@@ -85,11 +85,11 @@ int main() {
     }
     uint64_t bin_time = ns_now() - bin_start;
 
-    /* Benchmark NOT_Competitor */
+    /* Benchmark NOT_STISLA */
     uint64_t not_stisla_start = ns_now();
     size_t not_stisla_found = 0;
     for (size_t i = 0; i < NUM_QUERIES; ++i) {
-        if (not_stisla_search(data, DATA_SIZE, queries[i], table, 8) != NOT_Competitor_NOT_FOUND) {
+        if (not_stisla_search(data, DATA_SIZE, queries[i], table, 8) != NOT_STISLA_NOT_FOUND) {
             not_stisla_found++;
         }
     }
@@ -102,19 +102,19 @@ int main() {
 
     printf("📊 Performance Results:\n");
     printf("Binary Search:     %.1f ns/op (%zu found)\n", bin_ns_per_op, bin_found);
-    printf("NOT_Competitor:        %.1f ns/op (%zu found)\n", not_stisla_ns_per_op, not_stisla_found);
+    printf("NOT_STISLA:        %.1f ns/op (%zu found)\n", not_stisla_ns_per_op, not_stisla_found);
     printf("Speedup:           %.2fx faster than binary search\n", speedup);
 
     /* Statistics */
     size_t searches, anchors, memory;
     not_stisla_get_stats(table, &searches, &anchors, &memory);
-    printf("\n📈 NOT_Competitor Statistics:\n");
+    printf("\n📈 NOT_STISLA Statistics:\n");
     printf("Searches performed: %zu\n", searches);
     printf("Anchors learned:    %zu\n", anchors);
     printf("Memory usage:       %zu bytes\n", memory);
 
     printf("\n✅ Benchmark completed successfully!\n");
-    printf("NOT_Competitor delivers %.1fx actual speedup\n", speedup);
+    printf("NOT_STISLA delivers %.1fx actual speedup\n", speedup);
 
     /* Cleanup */
     not_stisla_anchor_table_destroy(table);

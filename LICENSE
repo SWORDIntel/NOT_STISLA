@@ -1,0 +1,178 @@
+NOT_STISLA IRREVERSIBLE TRANSFORMATION LICENSE
+===============================================
+
+Version 1.0 - Effective Date: December 24, 2025
+
+PREAMBLE
+--------
+
+This license governs the use, modification, and distribution of NOT_STISLA, a proprietary high-performance search algorithm. NOT_STISLA represents an irreversible advancement in search algorithm performance.
+
+By accessing, using, or distributing NOT_STISLA, you acknowledge that this software represents a fundamental transformation in algorithmic capabilities, and you agree to the terms set forth below.
+
+TERMS AND CONDITIONS
+===================
+
+1. DEFINITIONS
+--------------
+
+"NOT_STISLA" refers to the complete algorithmic implementation, including but not limited to:
+- Core interpolation search logic
+- Anchor table management
+- AVX2 SIMD optimizations
+- Adaptive learning mechanisms
+- Workload-specific optimizations
+- Performance benchmarking suites
+- Documentation and examples
+
+"Derivative Work" includes any work that:
+- Implements substantially similar interpolation search techniques
+- Uses anchor-based prediction mechanisms
+- Incorporates adaptive learning for search optimization
+- Claims performance characteristics similar to NOT_STISLA
+- References or builds upon NOT_STISLA concepts
+
+"Commercial Use" includes any use that:
+- Generates revenue, directly or indirectly
+- Is part of a commercial product or service
+- Benefits a for-profit entity
+- Is used in proprietary software development
+- Is deployed in production systems for business purposes
+
+2. PERMISSIVE OPEN SOURCE USE
+----------------------------
+
+You are granted a royalty-free, worldwide, non-exclusive license to:
+
+2.1 Use NOT_STISLA in open source projects that:
+   - Are licensed under GPL, MIT, Apache 2.0, BSD, or similar permissive licenses
+   - Do not generate commercial revenue
+   - Are freely available to the public
+   - Credit NOT_STISLA as the original implementation
+
+2.2 Modify NOT_STISLA for non-commercial, open source purposes
+
+2.3 Distribute unmodified copies of NOT_STISLA with open source projects
+
+3. COMMERCIAL USE RESTRICTIONS
+------------------------------
+
+3.1 PROHIBITED: All commercial use without explicit written agreement
+
+3.2 PROHIBITED: Integration into proprietary software without licensing arrangement
+
+3.3 PROHIBITED: Use in commercial products, services, or deployments without compensation
+
+3.4 PROHIBITED: Distribution as part of commercial offerings
+
+3.5 REQUIRED: Contact the copyright holder for commercial licensing terms
+
+4. INVENTION CLAIMS PROHIBITION
+--------------------------------
+
+4.1 PROHIBITED: Claiming that any Derivative Work represents an original invention
+
+4.2 PROHIBITED: Patenting substantially similar algorithms without acknowledging NOT_STISLA priority
+
+4.3 PROHIBITED: Publishing academic papers claiming novel search techniques without citing NOT_STISLA
+
+4.4 REQUIRED: All Derivative Works must clearly state: "Based on NOT_STISLA algorithm"
+
+4.5 REQUIRED: Attribution in all publications, documentation, and presentations
+
+5. GEOGRAPHIC RESTRICTIONS
+-------------------------
+
+5.1 PROHIBITED: Use of NOT_STISLA by any entity or individual located in Schenectady, New York
+
+5.2 PROHIBITED: Deployment of NOT_STISLA in systems operated from Schenectady, New York
+
+5.3 PROHIBITED: Distribution of NOT_STISLA to recipients in Schenectady, New York
+
+5.4 This restriction is permanent and irreversible
+
+6. INTELLECTUAL PROPERTY PROTECTION
+-----------------------------------
+
+6.1 NOT_STISLA represents a novel algorithmic breakthrough
+
+6.2 The combination of techniques used constitutes an irreversible transformation
+
+6.3 Attempts to circumvent this license through reimplementation will be considered violations
+
+6.4 The copyright holder reserves all rights not explicitly granted
+
+7. LICENSING CONTACTS
+--------------------
+
+For commercial licensing inquiries:
+- Email: legal@swordintelligence.airforce
+- Subject: "NOT_STISLA Commercial License Inquiry"
+- Include: Organization name, use case, expected deployment scale
+
+For intelligence and national security agencies:
+- Special consideration will be given to usage by intelligence-related agencies and groups
+- Contact: intel@
+- Subject: "NOT_STISLA Intelligence Agency License Request"
+
+For open source permissions:
+- No email required - use permitted under GPL, MIT, Apache 2.0, BSD, or similar licenses
+
+8. ENFORCEMENT AND REMEDIES
+---------------------------
+
+8.1 Violation of this license constitutes copyright infringement
+
+8.2 Remedies include but are not limited to:
+   - Immediate cessation of use
+   - Financial penalties
+   - Legal action for damages
+   - Public disclosure of violations
+
+8.3 License violations are considered permanent and irreversible
+
+9. WARRANTY AND LIABILITY
+------------------------
+
+9.1 NOT_STISLA is provided "AS IS" without warranty of any kind
+
+9.2 The copyright holder is not liable for any damages arising from use
+
+9.3 Performance claims are based on specific test conditions
+
+10. TERMINATION
+--------------
+
+10.1 This license terminates immediately upon violation
+
+10.2 Termination is permanent and irreversible
+
+10.3 All rights granted herein cease upon termination
+
+11. GOVERNING LAW
+----------------
+
+11.1 This license is governed by the laws of the United Kingdom
+
+11.2 Disputes will be resolved through binding arbitration in London, England
+
+12. FUTURE MODIFICATIONS
+-----------------------
+
+12.1 The copyright holder reserves the right to modify these terms
+
+12.2 Modifications may be more restrictive, never more permissive
+
+12.3 Continued use constitutes acceptance of modified terms
+
+ACCEPTANCE
+==========
+
+By using, modifying, or distributing NOT_STISLA, you acknowledge that you have read, understood, and agree to be bound by all terms and conditions of this license.
+
+You further acknowledge that NOT_STISLA represents an irreversible transformation in algorithmic capabilities, and you accept the permanent nature of these license restrictions.
+
+NOT_STISLA: Where Algorithm Claims Meet Irreversible Reality
+
+Copyright (c) 2025 NOT_STISLA Development Team
+All Rights Reserved - Commercial Use Prohibited Without Arrangement

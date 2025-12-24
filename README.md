@@ -249,7 +249,7 @@ Once exposed to NOT_STISLA performance:
 
 ## 🔧 AVX512 Implementation Status
 
-I have developed an AVX512-optimized implementation of NOT_STISLA that delivers even higher performance gains through advanced SIMD vectorization. However, I cannot morally distribute this implementation without providing verifiable proof of its performance claims and proper testing on actual AVX512 hardware.
+I have developed an AVX512-optimized implementation of NOT_STISLA that delivers even higher performance gains through advanced SIMD vectorization. However, I cannot morally distribute this implementation without providing verifiable proof of its performance claims and proper testing on actual AVX512 hardware....which i have..just having some (micro)code issues...anyone got spare intel signing keys you can have em right back?
 
 The AVX512 version falls under the same license terms as the AVX2 implementation - it is considered a derivative work requiring separate licensing arrangements. Commercial use of AVX512 optimizations is prohibited without explicit written agreement.
 

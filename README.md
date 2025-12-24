@@ -22,6 +22,7 @@
 | **Performance Gap** | - | **18.5×** | NOT_STISLA superiority |
 
 **Verdict:permanently debunked. NOT_STISLA delivers irreversible performance transformation.**
+Test hardware for storage was a external nvme drive over USB-C using a truly terrible realtek controller,for RAM DDR5 SODIMM
 
 ---
 

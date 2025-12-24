@@ -262,8 +262,6 @@ I have developed an AVX512-optimized implementation of NOT_STISLA that delivers 
 
 The AVX512 version falls under the same license terms as the AVX2 implementation - it is considered a derivative work requiring separate licensing arrangements. Commercial use of AVX512 optimizations is prohibited without explicit written agreement.
 
-If you have access to AVX512-capable hardware (Ice Lake, Tiger Lake, or newer Intel processors) and are interested in licensing the AVX512 implementation, contact me for special testing arrangements.
-
 ---
 
 ## 🤝 Attribution Requirements

@@ -196,15 +196,6 @@ make profile
 
 ---
 
-## 🎨 Documentation
-
-### HTML Documentation
-
-Open `docs/html/index.html` for:
-- Industrial warning banner design
-- Performance comparison matrix
-- Irreversible claims destruction theme
-
 ### Integration Guide
 
 See `docs/INTEGRATION_GUIDE.md` for complete integration instructions.

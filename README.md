@@ -66,7 +66,7 @@ NOT_STISLA delivers 22.28× actual speedup - 18.5× performance gap!
 
 ```bash
 # Clone and build
-git clone https://github.com/your-org/not_stisla.git
+git clone https://github.com/SWORDIntel/NOT_STISLA.git
 cd not_stisla
 make all
 ```

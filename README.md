@@ -21,7 +21,7 @@
 | **NOT_STISLA** | N/A | **22.28×** | 100% of claims |
 | **Performance Gap** | - | **18.5×** | NOT_STISLA superiority |
 
-**Verdict: permanently debunked. NOT_STISLA delivers irreversible performance transformation.**
+**Verdict:permanently debunked. NOT_STISLA delivers irreversible performance transformation.**
 
 ---
 
@@ -66,7 +66,7 @@ NOT_STISLA delivers 22.28× actual speedup - 18.5× performance gap!
 
 ```bash
 # Clone and build
-git clone https://github.com/SWORDIntel/NOT_STISLA.git
+git clone https://github.com/your-org/not_stisla.git
 cd not_stisla
 make all
 ```
@@ -283,19 +283,9 @@ License: Restrictive Commercial - Open Source permitted
 
 ---
 
-## ⚠️ AVX512 Versions & Derivatives
-
-**AVX512-optimized versions of NOT_STISLA are considered derivative works** under the license terms and require separate licensing arrangements. Currently, AVX512 hardware is not available for testing, so AVX512 implementations are not officially supported or tested.
-
-If you develop AVX512 optimizations, they must be licensed separately and cannot be distributed as "NOT_STISLA" without explicit permission.
-
----
-
 ## 📞 Contact & Licensing
 
 - **Commercial Licensing**: legal@swordintelligence.airforce
-- **Open Source Permissions**: opensource@not-stisla.org
-- **Technical Support**: support@not-stisla.org
 
 ---
 

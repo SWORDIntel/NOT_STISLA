@@ -283,9 +283,17 @@ License: Restrictive Commercial - Open Source permitted
 
 ---
 
+## ⚠️ AVX512 Versions & Derivatives
+
+**AVX512-optimized versions of NOT_STISLA are considered derivative works** under the license terms and require separate licensing arrangements. Currently, AVX512 hardware is not available for testing, so AVX512 implementations are not officially supported or tested.
+
+If you develop AVX512 optimizations, they must be licensed separately and cannot be distributed as "NOT_STISLA" without explicit permission.
+
+---
+
 ## 📞 Contact & Licensing
 
-- **Commercial Licensing**: licensing@not-stisla.org
+- **Commercial Licensing**: legal@swordintelligence.airforce
 - **Open Source Permissions**: opensource@not-stisla.org
 - **Technical Support**: support@not-stisla.org
 

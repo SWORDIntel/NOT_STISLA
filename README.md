@@ -8,7 +8,7 @@
 > **NOT_STISLA** - Where algorithm claims meet irreversible reality. 22.28× actual speedup vs a competitors 1.2× reality...truth be told i wasnt expecting to achieve such incredible gains even someone as dumb as me recognizes a 22x speedup on a variety of lookup operations is frankly ludicrous
 >
 >
-> **⚠️ COMMERCIAL USE PROHIBITED WITHOUT ARRANGEMENT** - This license permanently restricts commercial exploitation....unless you know you shoot me and email and we work something out im reasonable most of the time..even if youre a dev dying to use it from Schenectady with 2 or so exceptions we can figure something out.
+> **⚠️ COMMERCIAL USE PROHIBITED WITHOUT ARRANGEMENT** - This license permanently restricts commercial exploitation....unless you know you shoot me an email and we work something out im reasonable most of the time..even if youre a dev dying to use it from Schenectady with 2 or so exceptions we can figure something out.
 
 ---
 

@@ -24,6 +24,8 @@
 **Verdict:permanently debunked. NOT_STISLA delivers irreversible performance transformation.**
 Test hardware for storage was a external nvme drive over USB-C using a truly terrible realtek controller,for RAM DDR5 SODIMM..no massaging of any sort was done either way on testing competing solutions or NOT_STISLA...just the exact same test paramaters and environment conducted within minutes hitting "send it"
 
+I welcome benchmarks from other systems,toss in a pull request and add benchmarking proof or an issue or whatever
+
 ---
 
 ## 🔥 Performance Highlights

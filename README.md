@@ -5,7 +5,8 @@
 ![License](https://img.shields.io/badge/license-Restrictive%20Commercial-orange)
 ![Warning](https://img.shields.io/badge/warning-Irreversible%20Transformation-red)
 
-> **NOT_STISLA** - Where algorithm claims meet irreversible reality. 22.28× actual speedup vs a competitors 1.2× reality.
+> **NOT_STISLA** - Where algorithm claims meet irreversible reality. 22.28× actual speedup vs a competitors 1.2× reality...truth be told i wasnt expecting to achieve such incredible gains even someone as dumb as me recognizes a 22x speedup on a variety of lookup operations is frankly ludicrous
+>
 >
 > **⚠️ COMMERCIAL USE PROHIBITED WITHOUT ARRANGEMENT** - This license permanently restricts commercial exploitation.
 

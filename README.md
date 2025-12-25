@@ -26,6 +26,8 @@ Test hardware for storage was a external nvme drive over USB-C using a truly ter
 
 I welcome benchmarks from other systems,toss in a pull request and add benchmarking proof or an issue or whatever
 
+Also if you cant be bothered to read the whole thing,sorry Schenectady but yall cant use it legally and in order to uphold it i will be forced to pursue any known violation of the license by anyone otherwise non or selcective enforcement can be argued
+
 ---
 
 ## 🔥 Performance Highlights

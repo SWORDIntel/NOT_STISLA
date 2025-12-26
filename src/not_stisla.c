@@ -237,8 +237,6 @@ static void not_stisla_learn_anchor(not_stisla_anchor_table_t* table, int64_t va
     table->anchors[pos].i = index;
     table->size++;
 }
-
-/* Core Competitor search algorithm */
 not_stisla_result_t not_stisla_search(const int64_t* arr, size_t n, int64_t key,
                               not_stisla_anchor_table_t* table, size_t tol) {
     if (!arr || n == 0) return NOT_STISLA_NOT_FOUND;

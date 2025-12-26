@@ -7,7 +7,6 @@
  * - AVX2-style chunked processing
  * - High-precision interpolation
  * - Smart anchor learning
- * - DSMIL workload optimizations
  */
 
 #include "../include/not_stisla.h"

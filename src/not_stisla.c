@@ -363,8 +363,6 @@ void not_stisla_get_stats(const not_stisla_anchor_table_t* table, size_t* search
             (table->capacity * sizeof(not_stisla_anchor_t) + sizeof(not_stisla_anchor_table_t)) : 0;
     }
 }
-
-/* DSMIL workload-specific optimizations */
 not_stisla_result_t not_stisla_search_telemetry(const int64_t* timestamps, size_t n,
                                        int64_t target_time, not_stisla_anchor_table_t* table) {
     /* Telemetry optimization: higher tolerance for variable gaps */

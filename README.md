@@ -18,6 +18,40 @@
 **⚠️ VIOLATION WARNING**: License violations constitute copyright infringement with permanent consequences.
 
 ---
+Move along this is...catgirls,animated catgirl generator.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 I started this repository as, well actually, a bit of a personal joke, but if I'm being honest I wasn't expecting it to perform as it did and I've actually made some very interesting breakthroughs locally that I need to actually confirm before pushing. However, if I'm right, we're looking at 100x speedup on vector databases, just local, with nothing more than classical computers. 
 
 And I mean small quantum simulation, maybe 8 to 10 bits, which isn't much. It is not far away if you're a decent sized company. In fact, it's something you can actually get today if you know the right people at the right places, but you're looking at a thousand times speed up.

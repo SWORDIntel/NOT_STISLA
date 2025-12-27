@@ -1,24 +1,3 @@
-## 📁 Project Structure
-
-```
-not_stisla/
-├── include/
-│   └── not_stisla.h              # Public API
-├── src/
-│   └── not_stisla.c              # Ultra-optimized implementation
-├── benchmarks/
-│   ├── dsmil_benchmark.c         # Comprehensive test suite
-│   └── performance_proof.c       # Competitor debunking proof
-├── docs/
-│   ├── INTEGRATION_GUIDE.md      # Integration guide
-│   └── html/
-│       └── index.html            # NotPetya-themed documentation
-├── LICENSE                       # Restrictive commercial license
-├── Makefile                      # Build system
-└── README.md                     # This file
-```
-
----
 
 ## 🚫 License Restrictions
 

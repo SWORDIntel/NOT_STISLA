@@ -7,7 +7,7 @@
 [![C](https://img.shields.io/badge/C-11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 [![Fortran](https://img.shields.io/badge/Fortran-90%2B-purple.svg)](https://en.wikipedia.org/wiki/Fortran)
 [![Python](https://img.shields.io/badge/Python-3-yellow.svg)](https://www.python.org/)
-[![SIMD](https://img.shields.io/badge/SIMD-AVX2%20%7C%20AVX--512-black.svg)](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions)
+[![SIMD](https://img.shields.io/badge/SIMD-SSE4.2%20%7C%20AVX2%20%7C%20AVX--512-black.svg)](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions)
 [![Parallel](https://img.shields.io/badge/Parallel-OpenMP-green.svg)](https://www.openmp.org/)
 [![Archives](https://img.shields.io/badge/Ingestion-tar.zst-orange.svg)](https://facebook.github.io/zstd/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-success.svg)](https://www.kernel.org/)
@@ -34,9 +34,10 @@ KEYSTONE is a working native C library and benchmark suite, not just a design no
 | Unstructured / Dirty Log Tokenizer | Implemented (zero-allocation email:pass extraction) |
 | Heterogeneous Hash Indexer | Implemented (FNV-1a column projection) |
 | Native Context Micro-Model | Implemented (6-class DNN with confidence gating) |
-| OpenMP batch path | Available when built with OpenMP |
+| OpenMP batch path | Auto-enabled by default when compiler supports it |
 | Fortran batch backend | Optional; enabled when requested |
 | `.tar.zst` archive search | Optional; enabled when `libarchive` and `libzstd` are available |
+| SSE4.2 small-window scan | Implemented for native x86 builds with SSE4.2+ (AVX1-only CPUs) |
 | AVX2 small-window scan | Implemented for native x86 builds with AVX2 |
 | AVX-512 path | Build-gated and hardware-dependent |
 
@@ -373,8 +374,8 @@ KEYSTONE is intended for technical users who care about lookup correctness, runt
 | **Optional archive support** | `libarchive` and `libzstd` |
 | **Optional build detection** | `pkg-config` |
 | **Benchmark visualization** | Python 3 with numerical and plotting support |
-| **Parallel acceleration** | OpenMP-capable compiler/runtime |
-| **Vector acceleration** | AVX2 or AVX-512 capable CPU where available |
+| **Parallel acceleration** | OpenMP-capable compiler/runtime (auto-enabled by default) |
+| **Vector acceleration** | SSE4.2, AVX2, or AVX-512 capable CPU where available |
 | **Future accelerator backends** | GPU or NPU runtime/toolchain only after explicit backend implementation and measurement |
 
 ---
@@ -383,10 +384,10 @@ KEYSTONE is intended for technical users who care about lookup correctness, runt
 
 KEYSTONE is intentionally built as a native, silicon-tuned component. The
 default Makefile uses `-O3 -march=native` and enables resident CPU paths such as
-AVX2, optional AVX-512, OpenMP, Fortran, and `.tar.zst` support when the local
-toolchain and libraries allow it. CPU execution is the current implemented
-surface; GPU and NPU execution are future backend families that must earn their
-place through explicit data-movement-aware benchmarks.
+SSE4.2, AVX2, optional AVX-512, OpenMP (auto-enabled), Fortran, and `.tar.zst`
+support when the local toolchain and libraries allow it. CPU execution is the
+current implemented surface; GPU and NPU execution are future backend families
+that must earn their place through explicit data-movement-aware benchmarks.
 
 That means the preferred deployment model is to build KEYSTONE on the machine,
 container image, or target silicon family where it will run. It is not trying to

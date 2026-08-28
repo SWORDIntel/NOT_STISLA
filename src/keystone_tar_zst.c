@@ -111,6 +111,8 @@ typedef struct tar_zst_index_entry {
     int64_t first_key;
     int64_t last_key;
     tar_zst_bloom_t *bloom;  /* compact negative-lookup filter */
+    int64_t* keys;           /* retained sorted keys (NULL if not retained) */
+    size_t keys_capacity;    /* allocated capacity of keys[] */
 } tar_zst_index_entry_t;
 
 typedef struct {
@@ -138,6 +140,7 @@ static void tar_zst_index_destroy(tar_zst_index_t* idx) {
         for (size_t i = 0; i < idx->bucket_counts[b]; i++) {
             free(entries[i].name);
             tar_zst_bloom_destroy(entries[i].bloom);
+            free(entries[i].keys);
         }
         free(entries);
     }
@@ -168,7 +171,8 @@ static int tar_zst_index_add(tar_zst_index_t* idx,
                               size_t key_count,
                               int64_t first_key,
                               int64_t last_key,
-                              tar_zst_bloom_t* bloom) {
+                              tar_zst_bloom_t* bloom,
+                              const int64_t* sorted_keys) {
     if (!idx || !name) return -1;
     uint32_t h = tar_zst_hash_name(name, name_len);
     size_t b = h & (TAR_ZST_INDEX_BUCKETS - 1);
@@ -192,6 +196,18 @@ static int tar_zst_index_add(tar_zst_index_t* idx,
     memcpy(name_copy, name, name_len);
     name_copy[name_len] = '\0';
 
+    /* Retain a private copy of the sorted keys so positive lookups
+     * can search directly without re-decompressing the archive member. */
+    int64_t* keys_copy = NULL;
+    if (sorted_keys && key_count > 0) {
+        keys_copy = malloc(key_count * sizeof(int64_t));
+        if (!keys_copy) {
+            free(name_copy);
+            return -1;
+        }
+        memcpy(keys_copy, sorted_keys, key_count * sizeof(int64_t));
+    }
+
     entries[count].name = name_copy;
     entries[count].name_len = name_len;
     entries[count].compressed_offset = compressed_offset;
@@ -200,6 +216,8 @@ static int tar_zst_index_add(tar_zst_index_t* idx,
     entries[count].first_key = first_key;
     entries[count].last_key = last_key;
     entries[count].bloom = bloom;
+    entries[count].keys = keys_copy;
+    entries[count].keys_capacity = key_count;
     idx->bucket_counts[b] = count + 1;
     return 0;
 }
@@ -296,9 +314,14 @@ typedef struct parse_ctx {
     int skip_header;
     int header_skipped;
     int in_array;      /* JSON: inside [...] */
-    int last_was_digit;
-    int sign;
-    int64_t accum;
+    /* Bounded streaming integer parser state.
+     * Numbers are accumulated across chunk boundaries so we never
+     * need to buffer an entire member, and never read past buf+len. */
+    int in_number;     /* 1 if currently accumulating digits */
+    int sign;          /* +1 or -1 */
+    uint64_t accum;    /* unsigned accumulator (avoids signed UB) */
+    unsigned digit_count;
+    int overflow;      /* set if the number exceeds int64_t range */
     size_t count;
     int64_t first_key;
     int64_t last_key;
@@ -328,39 +351,115 @@ static inline void parse_ctx_emit(parse_ctx_t* ctx, int64_t val) {
     ctx->count++;
 }
 
-static void parse_csv(parse_ctx_t* ctx, const char* buf, size_t len) {
+/* ============================================================================
+ * Bounded Streaming Integer Parser
+ *
+ * Consumes exactly [buf, buf+len) — never reads past the buffer.  Numbers
+ * that span chunk boundaries are accumulated across calls via ctx state.
+ * This eliminates the OOB-read hazard of strtoll() and removes the need to
+ * buffer an entire decompressed member before parsing.
+ * ============================================================================ */
+
+static inline int parse_is_digit(char c) { return c >= '0' && c <= '9'; }
+
+static inline void parse_number_start(parse_ctx_t* ctx, int sign) {
+    ctx->in_number = 1;
+    ctx->sign = sign;
+    ctx->accum = 0;
+    ctx->digit_count = 0;
+    ctx->overflow = 0;
+}
+
+static inline void parse_number_digit(parse_ctx_t* ctx, char c) {
+    if (ctx->overflow) return;
+    ctx->digit_count++;
+    /* int64_t max is 9223372036854775807 (19 digits).  Any 20+ digit
+     * sequence overflows.  We also detect uint64 overflow below. */
+    if (ctx->digit_count > 19) {
+        ctx->overflow = 1;
+        return;
+    }
+    unsigned d = (unsigned)(c - '0');
+    uint64_t next = ctx->accum * 10u + d;
+    if (next < ctx->accum) {          /* unsigned wrap → overflow */
+        ctx->overflow = 1;
+        return;
+    }
+    ctx->accum = next;
+}
+
+static inline void parse_number_end(parse_ctx_t* ctx) {
+    if (!ctx->in_number) return;
+    ctx->in_number = 0;
+    if (ctx->digit_count == 0 || ctx->overflow) return;  /* discard */
+
+    if (ctx->sign > 0) {
+        if (ctx->accum > (uint64_t)INT64_MAX) return;    /* out of range */
+        parse_ctx_emit(ctx, (int64_t)ctx->accum);
+    } else {
+        /* INT64_MIN abs value is 9223372036854775808 = INT64_MAX + 1 */
+        if (ctx->accum > (uint64_t)INT64_MAX + 1u) return;
+        if (ctx->accum == (uint64_t)INT64_MAX + 1u)
+            parse_ctx_emit(ctx, INT64_MIN);
+        else
+            parse_ctx_emit(ctx, -(int64_t)ctx->accum);
+    }
+}
+
+/* Feed a chunk to the text parser. */
+static void parse_feed_text(parse_ctx_t* ctx, const char* buf, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        char c = buf[i];
+        if (ctx->in_number) {
+            if (parse_is_digit(c)) {
+                parse_number_digit(ctx, c);
+            } else {
+                parse_number_end(ctx);
+                if (c == '-' || c == '+')
+                    parse_number_start(ctx, c == '-' ? -1 : 1);
+            }
+        } else {
+            if (parse_is_digit(c)) {
+                parse_number_start(ctx, 1);
+                parse_number_digit(ctx, c);
+            } else if (c == '-' || c == '+') {
+                parse_number_start(ctx, c == '-' ? -1 : 1);
+            }
+        }
+    }
+}
+
+/* Feed a chunk to the CSV parser (same as text, plus header-line skipping). */
+static void parse_feed_csv(parse_ctx_t* ctx, const char* buf, size_t len) {
     for (size_t i = 0; i < len; i++) {
         char c = buf[i];
         if (c == '\n' && ctx->skip_header && !ctx->header_skipped) {
+            /* A number straddling the header newline is flushed first. */
+            parse_number_end(ctx);
             ctx->header_skipped = 1;
             continue;
         }
-        if (c == '-' || c == '+' || (c >= '0' && c <= '9')) {
-            char* end = NULL;
-            int64_t val = strtoll(&buf[i], &end, 10);
-            if (end != &buf[i]) {
-                parse_ctx_emit(ctx, val);
-                i = (size_t)(end - buf) - 1;
+        if (ctx->in_number) {
+            if (parse_is_digit(c)) {
+                parse_number_digit(ctx, c);
+            } else {
+                parse_number_end(ctx);
+                if (c == '-' || c == '+')
+                    parse_number_start(ctx, c == '-' ? -1 : 1);
+            }
+        } else {
+            if (parse_is_digit(c)) {
+                parse_number_start(ctx, 1);
+                parse_number_digit(ctx, c);
+            } else if (c == '-' || c == '+') {
+                parse_number_start(ctx, c == '-' ? -1 : 1);
             }
         }
     }
 }
 
-static void parse_text(parse_ctx_t* ctx, const char* buf, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        char c = buf[i];
-        if (c == '-' || c == '+' || (c >= '0' && c <= '9')) {
-            char* end = NULL;
-            int64_t val = strtoll(&buf[i], &end, 10);
-            if (end != &buf[i]) {
-                parse_ctx_emit(ctx, val);
-                i = (size_t)(end - buf) - 1;
-            }
-        }
-    }
-}
-
-static void parse_json(parse_ctx_t* ctx, const char* buf, size_t len) {
+/* Feed a chunk to the JSON parser (only inside [...] brackets). */
+static void parse_feed_json(parse_ctx_t* ctx, const char* buf, size_t len) {
     for (size_t i = 0; i < len; i++) {
         char c = buf[i];
         if (c == '[') {
@@ -368,27 +467,42 @@ static void parse_json(parse_ctx_t* ctx, const char* buf, size_t len) {
             continue;
         }
         if (c == ']') {
+            parse_number_end(ctx);
             ctx->in_array = 0;
             continue;
         }
         if (!ctx->in_array) continue;
-        if (c == '-' || c == '+' || (c >= '0' && c <= '9')) {
-            char* end = NULL;
-            int64_t val = strtoll(&buf[i], &end, 10);
-            if (end != &buf[i]) {
-                parse_ctx_emit(ctx, val);
-                i = (size_t)(end - buf) - 1;
+
+        if (ctx->in_number) {
+            if (parse_is_digit(c)) {
+                parse_number_digit(ctx, c);
+            } else {
+                parse_number_end(ctx);
+                if (c == '-' || c == '+')
+                    parse_number_start(ctx, c == '-' ? -1 : 1);
+            }
+        } else {
+            if (parse_is_digit(c)) {
+                parse_number_start(ctx, 1);
+                parse_number_digit(ctx, c);
+            } else if (c == '-' || c == '+') {
+                parse_number_start(ctx, c == '-' ? -1 : 1);
             }
         }
     }
 }
 
-static void parse_flush(parse_ctx_t* ctx, const char* buf, size_t len) {
+static void parse_feed(parse_ctx_t* ctx, const char* buf, size_t len) {
     switch (ctx->mode) {
-        case PARSE_CSV:   parse_csv(ctx, buf, len);   break;
-        case PARSE_TEXT:  parse_text(ctx, buf, len);  break;
-        case PARSE_JSON:  parse_json(ctx, buf, len);  break;
+        case PARSE_CSV:   parse_feed_csv(ctx, buf, len);   break;
+        case PARSE_TEXT:  parse_feed_text(ctx, buf, len);  break;
+        case PARSE_JSON:  parse_feed_json(ctx, buf, len);  break;
     }
+}
+
+/* Flush any pending number at end-of-member. */
+static void parse_finish(parse_ctx_t* ctx) {
+    parse_number_end(ctx);
 }
 
 /* Proper int64_t comparator for qsort */
@@ -547,9 +661,10 @@ int keystone_tar_zst_next_member(keystone_tar_zst_t* tz,
     return 1;
 }
 
-/* Read current entry fully into a single text buffer, then parse.
- * This avoids chunk-boundary corruption where strtoll could read
- * past buffer end when a number is split across chunks. */
+/* Stream the current entry chunk-by-chunk through the bounded parser.
+ * This avoids buffering the entire decompressed member and eliminates
+ * the strtoll() OOB-read hazard.  Numbers split across chunk boundaries
+ * are accumulated in parse_ctx state. */
 static int tar_zst_parse_current_entry(keystone_tar_zst_t* tz,
                                         int64_t** out_keys,
                                         size_t* out_count,
@@ -592,11 +707,6 @@ static int tar_zst_parse_current_entry(keystone_tar_zst_t* tz,
     size_t chunk_size = tz->options.chunk_size;
     if (chunk_size < 4096) chunk_size = 4096;
 
-    /* Accumulate entire member text into a single buffer */
-    char* text = NULL;
-    size_t text_len = 0;
-    size_t text_cap = 0;
-
     uint64_t t0_decompress = ns_now();
     ssize_t bytes_total = 0;
 
@@ -612,7 +722,6 @@ static int tar_zst_parse_current_entry(keystone_tar_zst_t* tz,
             set_error(tz, "archive_read_data failed: %s",
                       archive_error_string(tz->archive));
             free(chunk);
-            free(text);
             return -1;
         }
         if (n == 0) break;
@@ -621,25 +730,12 @@ static int tar_zst_parse_current_entry(keystone_tar_zst_t* tz,
             set_error(tz, "Member exceeds max decompression size (%llu bytes)",
                       (unsigned long long)KEYSTONE_TAR_ZST_MAX_DECOMPRESS_BYTES);
             free(chunk);
-            free(text);
             return -1;
         }
 
-        if (text_len + (size_t)n > text_cap) {
-            size_t new_cap = text_cap ? text_cap * 2 : chunk_size;
-            while (new_cap < text_len + (size_t)n) new_cap *= 2;
-            char* new_text = realloc(text, new_cap);
-            if (!new_text) {
-                set_error(tz, "Out of memory accumulating member text");
-                free(chunk);
-                free(text);
-                return -1;
-            }
-            text = new_text;
-            text_cap = new_cap;
-        }
-        memcpy(text + text_len, chunk, (size_t)n);
-        text_len += (size_t)n;
+        uint64_t t0_parse = ns_now();
+        parse_feed(&tz->parse_ctx, chunk, (size_t)n);
+        tz->stats.parse_time_ns += ns_now() - t0_parse;
     }
 
     free(chunk);
@@ -647,18 +743,17 @@ static int tar_zst_parse_current_entry(keystone_tar_zst_t* tz,
     tz->stats.bytes_read += (uint64_t)bytes_total;
     tz->stats.members_read++;
 
-    /* Parse the complete, contiguous text buffer */
-    uint64_t t0_parse = ns_now();
-    if (text && text_len > 0) {
-        parse_flush(&tz->parse_ctx, text, text_len);
-    }
-    tz->stats.parse_time_ns += ns_now() - t0_parse;
-    free(text);
+    /* Flush any number pending at end-of-member */
+    parse_finish(&tz->parse_ctx);
 
     /* Sort keys (KEYSTONE requires sorted input) */
     if (tz->parse_ctx.count > 1 && tz->parse_ctx.keys) {
         qsort(tz->parse_ctx.keys, tz->parse_ctx.count,
               sizeof(int64_t), int64_compare);
+        /* Recompute first/last from the sorted array — the pre-sort
+         * first_key/last_key reflect insertion order, not min/max. */
+        tz->parse_ctx.first_key = tz->parse_ctx.keys[0];
+        tz->parse_ctx.last_key  = tz->parse_ctx.keys[tz->parse_ctx.count - 1];
     }
 
     if (out_keys)   *out_keys = tz->parse_ctx.keys;
@@ -844,7 +939,8 @@ int keystone_tar_zst_build_index(keystone_tar_zst_t* tz) {
         }
 
         tar_zst_index_add(tz->index, tz->member_name, tz->member_name_len,
-                           0, 0, count, first_key, last_key, bloom);
+                           0, 0, count, first_key, last_key, bloom,
+                           (keys && count > 0) ? keys : NULL);
     }
 
     tz->index_built = 1;
@@ -883,7 +979,22 @@ keystone_result_t keystone_tar_zst_search_indexed(
         return KEYSTONE_NOT_FOUND;
     }
 
-    /* Bloom says "maybe present" — reopen archive and verify by streaming */
+    /* Fast path: search the retained sorted keys directly — no
+     * decompression, no reopen, no re-parse.  This turns the index
+     * from a negative-only accelerator into a real positive index. */
+    if (entry->keys && entry->key_count > 0) {
+        keystone_config_t default_config;
+        if (!config) {
+            keystone_config_init(&default_config, KEYSTONE_WORKLOAD_IDS);
+            config = &default_config;
+        }
+        return keystone_search_enhanced(entry->keys, entry->key_count,
+                                          key, table, config);
+    }
+
+    /* Fallback: keys were not retained — reopen archive and verify by
+     * streaming.  This path is only hit if key retention failed at
+     * index-build time (e.g. memory pressure). */
     if (!tz->archive_path) {
         set_error(tz, "Archive path not available for reopen");
         return KEYSTONE_NOT_FOUND;

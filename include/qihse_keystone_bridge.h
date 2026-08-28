@@ -39,6 +39,18 @@ typedef struct {
     qihse_kv_bridge_handle_t** cluster_targets; /* Array of per-node KV handles, length = num_cluster_nodes */
     uint32_t num_cluster_nodes;                 /* Number of nodes in the QIHSE cluster (0 = single-node) */
     uint32_t routing_slots;                     /* Hash slot count (0 defaults to KEYSTONE_QIHSE_ROUTING_SLOTS) */
+    /* --- Authenticated ingestion principal ---
+     *
+     * Per QIHSE's security model (AGENTS.md invariant #1), no classified
+     * write primitive may be invoked without an explicit authenticated
+     * security context.  The bridge now propagates this principal to
+     * qihse_kv_set_user() so the write inherits QIHSE's authorization
+     * policy rather than performing a context-free write.
+     *
+     * This is an opaque pointer to qihse_user_t.  It is set via
+     * keystone_qihse_bridge_set_principal() after authentication.  If
+     * NULL, dispatch_credential_authenticated() refuses the write. */
+    void* ingestion_principal;
 } keystone_qihse_bridge_config_t;
 
 /**
@@ -61,6 +73,12 @@ int keystone_qihse_bridge_init(const keystone_qihse_bridge_config_t* config);
  * When a cluster is configured, the email is routed via CRC16 into one of
  * KEYSTONE_QIHSE_ROUTING_SLOTS hash slots and forwarded to the owning node.
  * 
+ * @deprecated This function performs a context-free write and is retained
+ * only for backward compatibility.  New callers should use
+ * keystone_qihse_bridge_dispatch_credential_authenticated() which
+ * propagates an authenticated ingestion principal to QIHSE's
+ * authorization layer.
+ * 
  * @param email Null-terminated email string
  * @param pass Null-terminated password string
  * @param semantic_class Output from dsmil_micro_model_infer
@@ -69,6 +87,43 @@ int keystone_qihse_bridge_init(const keystone_qihse_bridge_config_t* config);
 int keystone_qihse_bridge_dispatch_credential(
     const char* email, 
     const char* pass, 
+    int semantic_class);
+
+/**
+ * @brief Set the authenticated ingestion principal for the bridge.
+ *
+ * Per QIHSE's security model, classified write primitives require an
+ * explicit authenticated security context.  This principal is propagated
+ * to qihse_kv_set_user() on every credential dispatch.
+ *
+ * @param principal Opaque pointer to an authenticated qihse_user_t.
+ *                  Pass NULL to clear the principal (subsequent
+ *                  authenticated dispatches will refuse).
+ */
+void keystone_qihse_bridge_set_principal(void* principal);
+
+/**
+ * @brief Dispatch a discovered credential to QIHSE with an authenticated
+ *        ingestion principal.
+ *
+ * This is the security-correct variant of
+ * keystone_qihse_bridge_dispatch_credential().  It uses
+ * qihse_kv_set_user() so the write inherits QIHSE's authorization policy
+ * (clearance + SCI compartment enforcement) rather than performing a
+ * context-free write.
+ *
+ * If no ingestion principal has been set via
+ * keystone_qihse_bridge_set_principal(), this function refuses the write
+ * and returns -1.
+ *
+ * @param email Null-terminated email string
+ * @param pass Null-terminated password string
+ * @param semantic_class Output from dsmil_micro_model_infer
+ * @return 0 on success, -1 on failure or if no principal is set
+ */
+int keystone_qihse_bridge_dispatch_credential_authenticated(
+    const char* email,
+    const char* pass,
     int semantic_class);
 
 /**

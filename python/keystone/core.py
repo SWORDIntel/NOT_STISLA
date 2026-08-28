@@ -134,6 +134,20 @@ _lib.keystone_search_batch_auto.argtypes = [
 ]
 _lib.keystone_search_batch_auto.restype = ctypes.c_size_t
 
+# Zero-copy batch API: takes raw int64 keys + size_t results arrays directly.
+# Avoids the per-key Python-level _CBatchItem construction/scatter loop.
+_lib.keystone_search_keys_batch_auto.argtypes = [
+    ctypes.POINTER(ctypes.c_int64),
+    ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_int64),
+    ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t),
+    _CAnchorTable_p,
+    ctypes.c_size_t,
+    ctypes.POINTER(_CParallelConfig),
+]
+_lib.keystone_search_keys_batch_auto.restype = ctypes.c_size_t
+
 _lib.keystone_get_last_backend_decision.argtypes = [ctypes.POINTER(_CBackendDecision)]
 _lib.keystone_get_last_backend_decision.restype = ctypes.c_int
 
@@ -268,6 +282,68 @@ class KeystoneSearch:
         for i in range(n_keys):
             r = items[i].result
             out[items[i].ordinal] = -1 if r == (2**64 - 1) or r >= len(arr) else int(r)
+        return out
+
+    @staticmethod
+    def search_batch_keys(
+        arr: Union[np.ndarray, list],
+        keys: Union[np.ndarray, list],
+        table: Optional[AnchorTable] = None,
+        tol: int = 4,
+        threads: int = 0,
+    ) -> np.ndarray:
+        """
+        Zero-copy batch lookup across `keys`.
+
+        Uses the native keystone_search_keys_batch_auto API which accepts
+        contiguous int64 key and uintp result arrays directly from NumPy,
+        avoiding the per-key Python-level _CBatchItem construction and
+        scatter loops.  For large batches (e.g. 1M queries) this eliminates
+        ~2M Python iterations and is substantially faster than search_batch.
+
+        Returns a NumPy int64 array of indices (-1 for misses).
+        """
+        if not isinstance(arr, np.ndarray) or arr.dtype != np.int64:
+            arr = np.ascontiguousarray(np.array(arr, dtype=np.int64))
+        if not isinstance(keys, np.ndarray) or keys.dtype != np.int64:
+            keys = np.ascontiguousarray(np.array(keys, dtype=np.int64))
+
+        n_keys = len(keys)
+        if n_keys == 0:
+            return np.full(0, -1, dtype=np.int64)
+
+        c_arr = arr.ctypes.data_as(ctypes.POINTER(ctypes.c_int64))
+        c_keys = keys.ctypes.data_as(ctypes.POINTER(ctypes.c_int64))
+        tbl_ptr = table.handle if table else None
+
+        # results array: uintp (size_t) on the C side, we use uintp on
+        # the Python side and convert to int64 for the -1 sentinel.
+        results = np.full(n_keys, ctypes.c_size_t(-1).value, dtype=np.uintp)
+        c_results = results.ctypes.data_as(ctypes.POINTER(ctypes.c_size_t))
+
+        pcfg = None
+        if threads > 0:
+            pcfg = _CParallelConfig()
+            pcfg.num_threads = threads
+            pcfg.use_thread_pool = 1
+            pcfg.batch_chunk = 256
+
+        _lib.keystone_search_keys_batch_auto(
+            c_arr,
+            len(arr),
+            c_keys,
+            n_keys,
+            c_results,
+            tbl_ptr,
+            int(tol),
+            ctypes.byref(pcfg) if pcfg else None,
+        )
+
+        # Convert size_t results to int64, mapping KEYSTONE_NOT_FOUND to -1.
+        not_found = ctypes.c_size_t(-1).value
+        out = results.astype(np.int64)
+        out[results == not_found] = -1
+        out[results >= len(arr)] = -1
         return out
 
     @staticmethod

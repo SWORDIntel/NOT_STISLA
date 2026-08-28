@@ -69,6 +69,10 @@ int keystone_qihse_bridge_init(const keystone_qihse_bridge_config_t* config) {
     return 0;
 }
 
+void keystone_qihse_bridge_set_principal(void* principal) {
+    g_bridge_cfg.ingestion_principal = principal;
+}
+
 int keystone_qihse_bridge_dispatch_credential(
     const char* email,
     const char* pass,
@@ -77,19 +81,10 @@ int keystone_qihse_bridge_dispatch_credential(
     if (!g_bridge_active) return -1;
     if (!email || !pass) return -1;
 
-    /* QIHSE UWP Target 0x01 = Key-Value Set */
-    /* Map the semantic class to QIHSE's metadata fields if necessary,
-       but for now we just shove the email:pass combo into the KV store
-       with the proper SCI compartment clearance. */
-
     qihse_kv_store_t* kv = (qihse_kv_store_t*)g_bridge_cfg.kv_target;
     uint16_t clearance   = g_bridge_cfg.default_clearance;
     uint16_t compartment = g_bridge_cfg.default_compartment;
 
-    /* Distributed cluster ingestion: route by CRC16 of the email key into
-     * one of 16,384 hash slots, then map that slot to a cluster node. This
-     * spreads the write load across the QIHSE cluster instead of funneling
-     * every credential through a single instance. */
     if (g_bridge_cfg.num_cluster_nodes > 0 && g_bridge_cfg.cluster_targets) {
         uint32_t slot = keystone_qihse_bridge_route_slot(email, strlen(email));
         uint32_t node = keystone_qihse_bridge_slot_to_node(slot, g_bridge_cfg.num_cluster_nodes);
@@ -97,16 +92,15 @@ int keystone_qihse_bridge_dispatch_credential(
         if (node_kv) {
             kv = node_kv;
         }
-        /* Per-node clearance/compartment could be extended here; we keep the
-         * default SCI classification for the whole cluster. */
     } else if (!kv) {
         return -1;
     }
 
-    /* Prepend the class integer to the value so QIHSE retains the semantic hit */
     char enriched_value[512];
     snprintf(enriched_value, sizeof(enriched_value), "class=%d|pass=%s", semantic_class, pass);
 
+    /* Legacy context-free write path.  Retained for backward compatibility
+     * but deprecated — new callers should use the authenticated variant. */
     int rc = qihse_kv_set(
         kv,
         email,
@@ -118,13 +112,62 @@ int keystone_qihse_bridge_dispatch_credential(
     return rc;
 }
 
+int keystone_qihse_bridge_dispatch_credential_authenticated(
+    const char* email,
+    const char* pass,
+    int semantic_class)
+{
+    if (!g_bridge_active) return -1;
+    if (!email || !pass) return -1;
+
+    /* Per QIHSE's security model (AGENTS.md invariant #1), no classified
+     * write primitive may be invoked without an explicit authenticated
+     * security context.  Refuse the write if no principal is set. */
+    qihse_user_t* principal = (qihse_user_t*)g_bridge_cfg.ingestion_principal;
+    if (!principal) {
+        return -1;
+    }
+
+    qihse_kv_store_t* kv = (qihse_kv_store_t*)g_bridge_cfg.kv_target;
+    uint16_t clearance   = g_bridge_cfg.default_clearance;
+    uint16_t compartment = g_bridge_cfg.default_compartment;
+
+    if (g_bridge_cfg.num_cluster_nodes > 0 && g_bridge_cfg.cluster_targets) {
+        uint32_t slot = keystone_qihse_bridge_route_slot(email, strlen(email));
+        uint32_t node = keystone_qihse_bridge_slot_to_node(slot, g_bridge_cfg.num_cluster_nodes);
+        qihse_kv_store_t* node_kv = (qihse_kv_store_t*)g_bridge_cfg.cluster_targets[node];
+        if (node_kv) {
+            kv = node_kv;
+        }
+    } else if (!kv) {
+        return -1;
+    }
+
+    char enriched_value[512];
+    snprintf(enriched_value, sizeof(enriched_value), "class=%d|pass=%s", semantic_class, pass);
+
+    /* Authenticated write: propagates the ingestion principal to QIHSE's
+     * authorization layer so the write inherits clearance + SCI compartment
+     * enforcement rather than being a context-free write. */
+    int rc = qihse_kv_set_user(
+        kv,
+        email,
+        enriched_value,
+        clearance,
+        compartment,
+        principal
+    );
+
+    return rc;
+}
+
 #else
 
 /*
  * Stub implementation for standalone KEYSTONE builds.
  * The bridge does nothing and returns an error if not explicitly compiled in.
  * The CRC16 routing helpers above remain available so that slot distribution
- * can be validated without libqihse.
+ * can be validated without linking libqihse.
  */
 
 int keystone_qihse_bridge_init(const keystone_qihse_bridge_config_t* config) {
@@ -133,6 +176,21 @@ int keystone_qihse_bridge_init(const keystone_qihse_bridge_config_t* config) {
 }
 
 int keystone_qihse_bridge_dispatch_credential(
+    const char* email,
+    const char* pass,
+    int semantic_class)
+{
+    (void)email;
+    (void)pass;
+    (void)semantic_class;
+    return -1;
+}
+
+void keystone_qihse_bridge_set_principal(void* principal) {
+    (void)principal;
+}
+
+int keystone_qihse_bridge_dispatch_credential_authenticated(
     const char* email,
     const char* pass,
     int semantic_class)

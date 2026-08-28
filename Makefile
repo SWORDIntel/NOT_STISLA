@@ -5,10 +5,17 @@ CC      := gcc
 CFLAGS  := -O3 -march=native -fPIC -Wall -Wextra -Werror=implicit-function-declaration -I./include -DKEYSTONE_ENABLE_PLATFORM_TUNING
 LDFLAGS := -lm
 
-# Optional OpenMP
+# Optional OpenMP (default: auto-enabled if the compiler supports it,
+# since multi-core CPUs benefit from parallel batch search.  Set
+# KEYSTONE_ENABLE_OPENMP=0 to disable.)
 ifeq ($(KEYSTONE_ENABLE_OPENMP),1)
     CFLAGS  += -fopenmp
     LDFLAGS += -fopenmp
+else ifneq ($(KEYSTONE_ENABLE_OPENMP),0)
+    ifeq ($(shell echo | $(CC) -fopenmp -dM -E - 2>/dev/null | grep -q '_OPENMP' && echo yes),yes)
+        CFLAGS  += -fopenmp
+        LDFLAGS += -fopenmp
+    endif
 endif
 
 # Optional tar.zst streaming support (default: enabled if libarchive + libzstd are available)

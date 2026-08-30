@@ -7,7 +7,7 @@
 ### Faster access to high-value records without replacing the systems that already store them.
 
 [![C](https://img.shields.io/badge/C-11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
-[![SIMD](https://img.shields.io/badge/SIMD-SSE4.2%20%7C%20AVX2%20%7C%20AVX--512-black.svg)](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions)
+[![SIMD](https://img.shields.io/badge/SIMD-SSE4.2%20%7C%20AVX%20%7C%20AVX2%20%7C%20AVX--512-black.svg)](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions)
 [![Parallel](https://img.shields.io/badge/Parallel-OpenMP-green.svg)](https://www.openmp.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-success.svg)](https://www.kernel.org/)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-red.svg)](LICENSE)
@@ -60,6 +60,7 @@ KEYSTONE combines several focused capabilities behind one native library:
 | **Unstructured-data ingestion** | Extracts useful identifiers from noisy source data without requiring a heavyweight parsing stack. |
 | **Archive-aware processing** | Supports `.tar.zst` workflows so compressed datasets can participate in the indexing pipeline. |
 | **Context classification** | An optional small native neural model can classify extracted context for downstream triage. |
+| **Vector similarity search** | LSH-indexed cosine/L2/dot similarity over 384-dim float32 vectors with SIMD acceleration and CUDA/VPU paths. |
 | **QIHSE integration** | Can act as a native preprocessing/ingestion layer for the QIHSE database ecosystem. |
 
 The core search engine is useful by itself. The ingestion, archive, classification, Fortran, OpenMP, SIMD, and QIHSE paths are additive capabilities rather than mandatory dependencies.
@@ -105,6 +106,31 @@ That run represents roughly **1.74× higher throughput and 47% lower median look
 
 These are **measured results, not universal guarantees**. CPU, compiler flags, dataset distribution, hit rate, cache state, batch shape, and enabled backends materially affect performance. Full methodology and additional measurements are kept in [`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md).
 
+### Vector Engine Benchmarks
+
+The KEYSTONE Vector Engine adds hardware-agnostic vector similarity search with LSH coarse indexing and SIMD exact rerank. Benchmarks were run on an **Intel Xeon E5-2407** (SSE4.2 + AVX, no AVX2/AVX-512) with 384-dimensional float32 vectors (SentenceTransformer all-MiniLM-L6-v2 output dimension):
+
+| Corpus size | Backend | Upsert rate | Search latency | Throughput | vs NumPy |
+|---|---|---:|---:|---:|---:|
+| 1,000 vectors | Scalar | 16,949 vec/s | 0.27 ms/query | 3,757 q/s | 2.5× |
+| 1,000 vectors | **AVX** | **17,241 vec/s** | **0.25 ms/query** | **3,965 q/s** | **2.5×** |
+| 1,000 vectors | VPU (Myriad X) | 16,949 vec/s | 1.04 ms/query | 962 q/s | 0.6× |
+| 10,000 vectors | Scalar | 10,267 vec/s | 1.85 ms/query | 542 q/s | 4.4× |
+| 10,000 vectors | **AVX** | **10,493 vec/s** | **1.80 ms/query** | **556 q/s** | **4.4×** |
+| 100,000 vectors | Scalar | 2,831 vec/s | 2.52 ms/query | 397 q/s | 30.8× |
+| 100,000 vectors | **AVX** | **2,752 vec/s** | **2.36 ms/query** | **423 q/s** | **30.8×** |
+| 100,000 vectors | NumPy brute force | — | 72.89 ms/query | 14 q/s | 1.0× (baseline) |
+
+**Key findings:**
+
+- **30.8× faster than NumPy** brute-force search at 100K vectors (AVX backend with LSH coarse index)
+- **AVX backend** uses 256-bit YMM float operations (8× float32 per instruction) — no AVX2 or AVX-512 required
+- **VPU (Myriad X)** is available for batch similarity computation via Unix socket, with graceful fallback to CPU SIMD if the VPU is unavailable
+- **LSH coarse index** reduces search from O(n) brute force to sub-linear candidate retrieval + exact SIMD rerank
+- **Graceful fallback chain:** CUDA → AVX-512 → AVX2 → AVX → SSE4.2 → NEON → VPU → scalar (always compiled)
+
+The vector engine is **hardware-agnostic**: the scalar path builds and runs on any Linux box with a C compiler. SIMD backends are compile-time guarded and runtime dispatched — a binary built on an AVX-512 server runs correctly on an SSE2-only machine via runtime detection.
+
 ---
 
 ## Current State
@@ -116,7 +142,7 @@ KEYSTONE is a working native library and test/benchmark suite.
 - scalar and anchor-guided `int64_t` search;
 - batch lookup and measured runtime backend selection;
 - decision provenance for backend choices;
-- SSE4.2 and AVX2 local scan paths where supported;
+- SSE4.2, AVX, and AVX2 local scan paths where supported;
 - build-gated AVX-512 path;
 - OpenMP batch execution;
 - optional Fortran batch backend;
@@ -124,6 +150,7 @@ KEYSTONE is a working native library and test/benchmark suite.
 - unstructured-data tokenizer and hash indexer;
 - native context micro-model;
 - QIHSE bridge support;
+- **vector similarity engine** with LSH coarse indexing, SIMD cosine/L2/dot distance, CUDA and VPU (Myriad X) accelerated paths, and 8-level graceful fallback (scalar always compiled);
 - correctness and performance test infrastructure.
 
 GPU/NPU execution is not presented as a current production backend. The project detects or contains experimental accelerator work in places, but accelerator support is only considered implemented when correctness, transfer cost, fallback behavior, dispatch provenance, and target-hardware measurements are established.
@@ -199,12 +226,13 @@ KEYSTONE_ENABLE_QIHSE_BRIDGE=1 QIHSE_ROOT=/path/to/QIHSE make
 For readers who want the implementation detail without making it the front door:
 
 - **Primary implementation:** C11
-- **Current execution surface:** scalar C, SSE4.2/AVX2 local scans, build-gated AVX-512, optimized C batch, OpenMP, optional Fortran
-- **Search model:** anchor-guided interpolation over sorted `int64_t` keyspaces
-- **Auto-selection:** first-use local timing calibration with cached decisions
+- **Current execution surface:** scalar C, SSE4.2, AVX (256-bit YMM), AVX2, build-gated AVX-512, optimized C batch, OpenMP, optional Fortran, optional CUDA (soft-loaded), optional VPU (Myriad X, guarded)
+- **Search model:** anchor-guided interpolation over sorted `int64_t` keyspaces; vector similarity via LSH coarse index + SIMD exact rerank
+- **Auto-selection:** first-use local timing calibration with cached decisions; runtime CPUID dispatch for SIMD; dlopen for CUDA; socket probe for VPU
 - **Data ingestion:** raw/unstructured tokenization, FNV-1a projection, optional archive handling
 - **Classification:** native 260 → 64 → 6 context micro-model
-- **Platform:** Linux
+- **Vector engine:** 384-dim float32 similarity search with LSH, cosine/L2/dot metrics, 8-level graceful fallback (scalar → VPU → NEON → SSE4.2 → AVX → AVX2 → AVX-512 → CUDA)
+- **Platform:** Linux (x86-64, ARM64)
 - **Testing posture:** correctness cross-checks plus workload- and backend-aware benchmarks
 
 ### Documentation
@@ -215,6 +243,8 @@ For readers who want the implementation detail without making it the front door:
 | [`docs/TECHNICAL_OVERVIEW.md`](docs/TECHNICAL_OVERVIEW.md) | Architecture, backend selection, feature matrix, memory and execution model |
 | [`docs/STATUS_SUMMARY.md`](docs/STATUS_SUMMARY.md) | What is implemented and what remains |
 | [`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md) | Benchmark methodology and measured results |
+| [`vector_engine/keystone_vector_engine.h`](vector_engine/keystone_vector_engine.h) | Vector engine API — similarity search with LSH + SIMD + CUDA + VPU |
+| [`vector_engine/build_vector_engine.sh`](vector_engine/build_vector_engine.sh) | Auto-detecting build script for vector engine |
 | [`docs/BUILD_MODES.md`](docs/BUILD_MODES.md) | Native/scalar/optional build configuration |
 | [`docs/INTEGRATION.md`](docs/INTEGRATION.md) | Integration guidance |
 | [`docs/ACCELERATOR_CONTRACT.md`](docs/ACCELERATOR_CONTRACT.md) | Requirements for adding accelerator backends |

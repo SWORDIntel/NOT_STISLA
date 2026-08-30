@@ -43,8 +43,7 @@ Condensed from DYNAMIC_HOT_PATH_PLAN, FORTRAN_BACKEND_PLAN, IMPROVEMENT_PLAN, OP
 
 ## Still To Do
 
-See [ROADMAP.md](ROADMAP.md) for the phased roadmap and acceptance gates. The
-items below are the current engineering backlog.
+The items below are the current engineering backlog. The root README intentionally keeps this detail out of the executive overview; see [TECHNICAL_OVERVIEW.md](TECHNICAL_OVERVIEW.md) for the surrounding architecture.
 
 ### Calibration & Cache
 - Add more workload profile fields (hit-rate, gap, stride) to calibration cache keys and decision output.

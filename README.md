@@ -70,17 +70,18 @@ The core search engine is useful by itself. The ingestion, archive, classificati
 
 ```mermaid
 flowchart LR
-    A["Existing data\nDatabase · Telemetry · Archives · Raw files"] --> K["KEYSTONE"]
+    A["Existing data\nDatabase · Telemetry · Archives · Raw files"] --> I
 
-    subgraph K["KEYSTONE acceleration layer"]
+    subgraph KS["KEYSTONE acceleration layer"]
         I["Ingest / Normalize"] --> S["Adaptive indexed search"]
         S --> C["Runtime backend calibration"]
         I --> M["Optional context classification"]
     end
 
-    K --> R["Fast record / offset / entity lookup"]
-    K --> Q["Optional QIHSE ingestion"]
+    S --> R["Fast record / offset / entity lookup"]
+    M --> R
     R --> X["Existing application or analysis workflow"]
+    R --> Q["Optional QIHSE ingestion"]
 ```
 
 The design is intentionally database-adjacent. KEYSTONE does not need to own the system of record; it accelerates the path between source data and the record an application actually needs.
@@ -100,7 +101,7 @@ One current integrated benchmark on an **Intel Xeon E5-2407** measured the KEYST
 | Standard binary search, 1M rows | 2,016,334 lookups/s | 415 ns |
 | **KEYSTONE anchor search, 1M rows** | **3,510,610 lookups/s** | **218 ns** |
 
-That run represents roughly **1.74× higher throughput and about 1.9× lower median lookup latency** against the benchmark's standard binary-search baseline on that host.
+That run represents roughly **1.74× higher throughput and 47% lower median lookup latency** against the benchmark's standard binary-search baseline on that host.
 
 These are **measured results, not universal guarantees**. CPU, compiler flags, dataset distribution, hit rate, cache state, batch shape, and enabled backends materially affect performance. Full methodology and additional measurements are kept in [`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md).
 

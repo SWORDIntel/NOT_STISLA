@@ -189,3 +189,99 @@ int load_telemetry_example() {
     return 0;
 }
 ```
+
+## 4. Vector Similarity Engine Integration
+
+KEYSTONE includes an embedded vector search engine (`vector_engine/libkeystone_vector.so`) supporting 384-dimensional and arbitrary-dimension float32 embeddings with cosine, L2, and dot similarity metrics.
+
+### 4.1 C API Integration
+
+```c
+#include "keystone_vector_engine.h"
+
+int vector_search_example() {
+    keystone_vec_config_t cfg = {
+        .metric = KEYSTONE_METRIC_COSINE,
+        .backend = KEYSTONE_BACKEND_AUTO, // Runtime auto-dispatch
+        .use_lsh = 1,                      // Enable LSH coarse index
+        .lsh_bits = 16,
+        .lsh_tables = 4,
+        .lsh_probes = 2,
+        .rerank_k = 256
+    };
+
+    keystone_vec_engine_t *e = NULL;
+    keystone_vec_create(&e, 384, 10000, &cfg);
+
+    // Upsert vectors
+    float vector_data[384] = { /* ... */ };
+    uint64_t id = 42;
+    keystone_vec_upsert(e, &id, vector_data, 1);
+    keystone_vec_finalize_index(e);
+
+    // Top-k search (zero-heap execution via stack scratchpads)
+    float query[384] = { /* ... */ };
+    keystone_vec_result_t results[10];
+    keystone_vec_search(e, query, 10, results);
+
+    for (int i = 0; i < 10; i++) {
+        printf("Rank %d: id=%lu, dist=%.4f\n", i, results[i].id, results[i].distance);
+    }
+
+    keystone_vec_destroy(e);
+    return 0;
+}
+```
+
+### 4.2 Python ctypes Integration
+
+```python
+from vector_engine.test_vector_engine import KeystoneVectorEngine
+import numpy as np
+
+# Initialize 384-dim engine with cosine metric
+engine = KeystoneVectorEngine(dim=384, capacity=10000, metric="cosine", backend="auto")
+
+# Insert embeddings
+vectors = np.random.randn(1000, 384).astype(np.float32)
+ids = np.arange(1000, dtype=np.uint64)
+engine.upsert(ids, vectors)
+engine.finalize()
+
+# Search top-5 nearest neighbors
+query = np.random.randn(384).astype(np.float32)
+top_k = engine.search(query, k=5)
+for hit in top_k:
+    print(f"ID: {hit['id']}, Distance: {hit['dist']:.4f}")
+```
+
+## 5. QIHSE Bridge & Security Invariant Compliance
+
+When KEYSTONE serves as the preprocessing and ingestion pipeline for QIHSE, all writes must comply with **QIHSE AGENTS.md Invariant #1** (no classified data without an explicit authenticated security context):
+
+```c
+#include "qihse_keystone_bridge.h"
+
+int bridge_example(qihse_user_t* user_principal, void* kv_store) {
+    keystone_qihse_bridge_config_t cfg = {
+        .kv_target = kv_store,
+        .default_clearance = QIHSE_CLEARANCE_SECRET,
+        .default_compartment = 0x01,
+        .ingestion_principal = user_principal // Required for authenticated writes
+    };
+
+    keystone_qihse_bridge_init(&cfg);
+
+    // Authenticated dispatch carries user security context directly to QIHSE KV
+    int rc = keystone_qihse_bridge_dispatch_credential_authenticated(
+        "operator@intel.agency", "hash_payload", 1
+    );
+
+    // keystone_qihse_bridge_dispatch_credential() also safely auto-delegates
+    // to the authenticated path when ingestion_principal is configured:
+    keystone_qihse_bridge_dispatch_credential("analyst@intel.agency", "token_val", 2);
+
+    keystone_qihse_bridge_shutdown();
+    return rc;
+}
+```

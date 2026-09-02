@@ -41,6 +41,25 @@ Condensed from DYNAMIC_HOT_PATH_PLAN, FORTRAN_BACKEND_PLAN, IMPROVEMENT_PLAN, OP
 - Stride profiles: sequential, strided, random.
 - Thread scaling sweeps (1–32 threads).
 
+### Vector Similarity Engine
+- Standalone vector search engine (`vector_engine/`) for 384-dim (and arbitrary-dim) float32 embeddings with cosine, L2, and dot metrics.
+- LSH coarse index with multiprobe search, 4-way unrolled FMA projection, 64-bit quick bloom filter candidate deduplication, and $O(N \log N)$ `qsort` bucket finalization.
+- Multi-tier SIMD distance kernels: Scalar, SSE4.2, AVX, AVX2, AVX-512, ARM NEON, Myriad X VPU, and CUDA with graceful runtime fallback.
+- Zero-heap query scratchpads for cosine query normalization (up to 1,024 dims) and candidate reranking (up to 512 candidates).
+- Compiler-agnostic OpenMP batch search (`keystone_vec_search_batch`) auto-detected during vector engine build.
+
+### Archive Streaming & Ingestion
+- Streaming `.tar.zst` reader (`src/keystone_tar_zst.c`) with zero on-disk inflation.
+- Persistent sidecar indices (`<archive>.idx.json`) for sub-millisecond archive startup and $O(1)$ negative rejection via compact Bloom filters.
+- Dual-threaded producer/consumer ring-buffered decompression (`enable_pipeline`) overlapping I/O with parsing.
+- Non-destructive stream rewind (`keystone_tar_zst_rewind()`) enabling out-of-order member queries.
+- Multi-archive parallel batch pools (`keystone_tar_zst_batch_*`) with OpenMP parallel candidate evaluation.
+
+### Concurrency & Hash Indexing
+- Zero-copy LSD radix sort (`src/dsmil_hash_indexer.c`): replaced 32 full-array `memcpy` operations across 8 passes with double-buffered pointer swapping.
+- Reader-writer lock (`pthread_rwlock_t`) on auto-backend calibration cache (`src/keystone.c`), enabling lock-free concurrent lookups.
+- QIHSE bridge authentication: auto-delegating credential dispatch to `keystone_qihse_bridge_dispatch_credential_authenticated()` when principal is configured, enforcing QIHSE Invariant 1.
+
 ## Still To Do
 
 The items below are the current engineering backlog. The root README intentionally keeps this detail out of the executive overview; see [TECHNICAL_OVERVIEW.md](TECHNICAL_OVERVIEW.md) for the surrounding architecture.
@@ -62,9 +81,8 @@ The items below are the current engineering backlog. The root README intentional
 - True OS cold-cache testing (behind explicit opt-in because dropping caches affects the whole host).
 
 ### Architecture Candidates (deferred)
-- **AVX-512**: Split into isolated object (`src/keystone_avx512.c`), compile only with AVX-512 flags, validate on real AVX-512 hardware.
 - **AMX**: CPU feature detection exists, but no AMX search backend should be claimed until there is a real tiled integer search design.
-- **GPU/NPU**: Native-first also includes resident accelerators, but no GPU or NPU backend should be claimed until transfer costs, correctness, fallback behavior, and dispatch provenance are implemented and measured.
+- **GPU/NPU Vector Acceleration**: CUDA and Myriad X VPU kernels are implemented in `vector_engine/` with runtime soft-loading; continuing hardware-in-the-loop stress testing on resident silicon.
 
 ### Profiling & Measurement
 - Tune prefetch distance per workload instead of global fixed distance.

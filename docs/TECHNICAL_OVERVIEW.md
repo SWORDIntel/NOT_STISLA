@@ -153,6 +153,9 @@ The ingestion path is designed for data that is useful before it is clean.
 
 A native tokenizer extracts identifiers from noisy input. String-like fields can then be projected into a compact 64-bit keyspace through FNV-1a and searched using the same indexed lookup machinery as native integer identifiers.
 
+- **Zero-Copy Double-Buffered Radix Sort**: Keys, offsets, raw strings, and lengths are sorted using an 8-pass Least Significant Digit (LSD) radix sort (`src/dsmil_hash_indexer.c`). The sort operates via double-buffered pointer ping-ponging between primary and scratch arrays. Because the pass count ($8$) is even, sorted data terminates directly in caller arrays with zero full-array memory copies (eliminating 32 full-array `memcpy` operations).
+- **Collision Verification**: Every positive hash lookup is checked against the original source string bytes to eliminate false matches from 64-bit hash collisions.
+
 The optional context model consumes a bounded byte window around a hit and emits one of six semantic classes with confidence gating. This model is deliberately small enough to execute directly in the native pipeline rather than requiring a general ML runtime for every classification.
 
 ## Archive Support & Streaming Ingestion
@@ -183,6 +186,42 @@ When `libarchive` and `libzstd` are available, KEYSTONE can participate directly
 
 Archive support is optional and is not required by the core numeric search engine.
 
+## Vector Similarity Engine
+
+KEYSTONE includes a high-performance vector search engine (`vector_engine/`) optimized for 384-dimensional dense float32 embeddings (e.g., all-MiniLM-L6-v2, text-embedding-3-small) as well as arbitrary dimensionality:
+
+- **Coarse Indexing via Locality-Sensitive Hashing (LSH)**:
+  - Random hyperplane projections map continuous vectors into discrete integer bucket keys.
+  - Multi-probe querying explores adjacent hypercube vertices for high recall.
+  - **SIMD Projection Pipelining**: Projection dot-products (`sign_dot`) are 4-way unrolled to saturate CPU FMA execution ports.
+  - **Fast Bloom Deduplication**: A 64-bit quick bitmask filters candidates before linear scanning, skipping duplicate checks in $O(1)$ time.
+  - **$O(N \log N)$ Finalization**: Bucket keys are sorted with standard `qsort` over packed contiguous structs (`lsh_bucket_entry_t`).
+
+- **Hierarchical SIMD & Hardware Acceleration**:
+  - Distance metrics: Cosine, L2 (Euclidean), and Dot-product.
+  - Runtime dispatch probes CPU features and dynamically binds optimized kernels:
+    1. **CUDA GPU**: Bounded batch distance matrix computation via dynamic `libcuda.so` loading.
+    2. **Myriad X VPU**: Neural compute stick offload for embedded edge deployments.
+    3. **AVX-512**: 16-lane 32-bit float vectorization with FMA.
+    4. **AVX2 / FMA**: 8-lane vectorization with unrolled accumulators.
+    5. **AVX1**: 8-lane vectorization (supported on Sandy Bridge / Ivy Bridge).
+    6. **SSE4.2**: 4-lane vectorization for older x86_64 cores.
+    7. **ARM NEON**: 4-lane vectorization for aarch64/Graviton.
+    8. **Scalar Fallback**: Guaranteed always-compiled reference implementation.
+
+- **Zero-Heap Query Fast Paths**:
+  - Queries execute without heap allocations: cosine normalization uses a 1,024-element stack buffer, and candidate reranking uses a 512-element stack array.
+  - Multi-core batch vector queries execute via OpenMP (`keystone_vec_search_batch`).
+
+## Concurrency & Reader-Writer Cache Locking
+
+Auto-backend calibration decisions are cached in a globally accessible ring buffer (`g_backend_cache`). To prevent lock contention among parallel search threads:
+
+- Access is synchronized via a POSIX reader-writer lock (`pthread_rwlock_t g_backend_cache_rwlock`).
+- Read-heavy query dispatch evaluates cached hardware decisions concurrently with `pthread_rwlock_rdlock()`.
+- Cache misses and benchmark recordings acquire exclusive write leases via `pthread_rwlock_wrlock()`.
+- Publication race safety: `valid=1` is published atomically after all calibration metadata fields are initialized.
+
 ## QIHSE Bridge
 
 KEYSTONE can be compiled as a native preprocessing/ingestion layer for QIHSE:
@@ -192,7 +231,11 @@ make clean
 KEYSTONE_ENABLE_QIHSE_BRIDGE=1 QIHSE_ROOT=/path/to/QIHSE make
 ```
 
-The integration is additive. Applications can continue using KEYSTONE directly without QIHSE, or use KEYSTONE to parse/index/classify input before structured results are passed into QIHSE.
+### Security Invariant Compliance (QIHSE AGENTS.md Invariant #1)
+
+Per QIHSE's core security invariants, no classified read or write primitive may be executed without an explicit authenticated security context (`qihse_user_t*`):
+- `keystone_qihse_bridge_dispatch_credential_authenticated()` explicitly validates and propagates the caller's `ingestion_principal`. Writes are rejected if no authenticated principal context is supplied.
+- Legacy context-free dispatch (`keystone_qihse_bridge_dispatch_credential`) automatically delegates to the authenticated path whenever `ingestion_principal` is configured, preventing authorization bypasses during high-throughput ingestion.
 
 See [INTEGRATION.md](INTEGRATION.md) for integration details.
 

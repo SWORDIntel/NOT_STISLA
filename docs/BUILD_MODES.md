@@ -75,18 +75,40 @@ make benchmarks
 - Compiles `dsmil_benchmark` and `performance_proof`.
 - Useful for validating target-silicon performance before deploying to production.
 
-## 7. Packaging: Static vs Shared Library
-KEYSTONE currently compiles as a collection of native object files (`.o`), allowing maximum inlining and Link-Time Optimization (LTO) when statically linked directly into your parent application.
+## 7. Packaging: Shared Library & Static Objects
+KEYSTONE provides a first-class Makefile target to build the shared library `libkeystone.so`:
 
-**For a Static Library (`libkeystone.a`):**
 ```bash
+make lib
+```
+
+This compiles all native modules with `-fPIC` and produces `libkeystone.so` with embedded dependency linkage.
+
+**For a Static Archive (`libkeystone.a`):**
+```bash
+make
 ar rcs libkeystone.a src/*.o
 ```
+*(Note: Static linkage allows Link-Time Optimization (LTO) and cross-module SIMD inlining for maximum search throughput.)*
 
-**For a Shared Library (`libkeystone.so`):**
-To build KEYSTONE as a dynamically linked object, you must append `-fPIC` to the `CFLAGS` during `make`, and link the resulting objects:
+## 8. Vector Similarity Engine Build
+The standalone vector similarity engine is built via its self-contained build script:
+
 ```bash
-make CFLAGS="-O3 -march=native -fPIC"
-gcc -shared -o libkeystone.so src/*.o
+./vector_engine/build_vector_engine.sh
 ```
-*(Note: Shared library boundaries may prevent cross-module SIMD inlining. Static linkage is heavily recommended for maximum search throughput.)*
+
+**Build Features:**
+- Detects host compiler (`gcc`, `clang`, `cc`).
+- Probes and compiles available hardware kernels:
+  - `kernels_scalar.c` (always compiled)
+  - `kernels_sse42.c` (compiled on x86 with SSE4.2)
+  - `kernels_avx.c` (compiled on x86 with AVX)
+  - `kernels_avx2.c` (compiled on x86 with AVX2/FMA)
+  - `kernels_avx512.c` (compiled on x86 with AVX-512)
+  - `kernels_neon.c` (compiled on ARM aarch64)
+- **Compiler-Agnostic OpenMP**: Automatically probes `-fopenmp` using compiler trial builds and links OpenMP for parallel batch search (`keystone_vec_search_batch`).
+- **Accelerator Flags**:
+  - `KEYSTONE_NO_CUDA=1`: Skip CUDA kernel compilation.
+  - `KEYSTONE_HAVE_VPU=1`: Enable Myriad X VPU support.
+- Produces `vector_engine/libkeystone_vector.so` with runtime dynamic kernel dispatch.

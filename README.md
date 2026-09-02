@@ -145,7 +145,9 @@ KEYSTONE is a working native library and test/benchmark suite.
 - SSE4.2, AVX, and AVX2 local scan paths where supported;
 - build-gated AVX-512 path;
 - OpenMP batch execution;
+- optional Fortran batch backend;
 - `.tar.zst` archive workflows with persistent `.idx.json` sidecars, ring-buffered pipeline decompression, and multi-archive batch pools;
+- unstructured-data tokenizer and hash indexer;
 - native context micro-model;
 - QIHSE bridge support;
 - **vector similarity engine** with LSH coarse indexing, SIMD cosine/L2/dot distance, CUDA and VPU (Myriad X) accelerated paths, and 8-level graceful fallback (scalar always compiled);

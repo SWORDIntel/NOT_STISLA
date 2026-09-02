@@ -33,8 +33,9 @@ To guarantee that telemetry processing and `.tar.zst` streaming features are com
 make KEYSTONE_ENABLE_TAR_ZST=1
 ```
 **Features:**
-- Requires `libarchive` and `libzstd`.
+- Requires `libarchive`, `libzstd`, and POSIX threads (`-lpthread`).
 - Enables `keystone_tar_zst.c` and `dsmil_telemetry_processor.c`.
+- Activates persistent sidecar indexing (`.idx.json`), dual-threaded producer/consumer ring buffering (`enable_pipeline`), and multi-archive parallel batch pools.
 
 ## 4. OpenMP Build
 OpenMP is now **auto-enabled by default** when the compiler supports it. You no longer need to explicitly request it.

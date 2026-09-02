@@ -80,33 +80,112 @@ int main() {
 }
 ```
 
-## 3. Extracting Telemetry from Archives
+## 3. Compressed Archive Ingestion (.tar.zst)
 
-KEYSTONE provides built-in utilities to stream directly from `.tar.zst` files without loading the entire archive into memory at once. This is extremely useful for log processing and time-series telemetry ingest.
+KEYSTONE provides built-in utilities to stream directly from `.tar.zst` archives without inflating the entire file into memory or extracting to disk.
+
+### 3.1 Streaming Search & Member Extraction
+
+```c
+#include "keystone_tar_zst.h"
+#include <stdio.h>
+
+int search_archive_example() {
+    keystone_tar_zst_options_t opts = {
+        .format = KEYSTONE_TAR_ZST_FORMAT_AUTO,
+        .enable_pipeline = 1,        // Dual-threaded producer/consumer ring buffer
+        .chunk_size = 256 * 1024,
+        .arena_slab_size = 1024 * 1024
+    };
+
+    keystone_tar_zst_t* tz = keystone_tar_zst_open("logs_2026.tar.zst", &opts);
+    if (!tz) return -1;
+
+    // Search for key 1500 directly within a member (auto-rewinds if member precedes cursor)
+    keystone_result_t idx = keystone_tar_zst_search_member(
+        tz, "telemetry.csv", 1500, NULL, NULL
+    );
+
+    if (idx != KEYSTONE_NOT_FOUND) {
+        printf("Found key at sorted offset %zu in telemetry.csv\n", idx);
+    }
+
+    keystone_tar_zst_close(tz);
+    return 0;
+}
+```
+
+### 3.2 Persistent Sidecar Indexing (`.idx.json`)
+
+To avoid rescanning archives on every run, generate an accompanying `.idx.json` index:
+
+```c
+// Generate and persist sidecar index
+keystone_tar_zst_t* tz = keystone_tar_zst_open("logs_2026.tar.zst", NULL);
+keystone_tar_zst_build_index(tz);
+keystone_tar_zst_save_index(tz, "logs_2026.tar.zst.idx.json");
+keystone_tar_zst_close(tz);
+
+// Later / in another process: instant sub-millisecond open via sidecar
+keystone_tar_zst_options_t opts = { .auto_load_index = 1 };
+keystone_tar_zst_t* fast_tz = keystone_tar_zst_open("logs_2026.tar.zst", &opts);
+
+// Non-matching keys are rejected in O(1) time via Bloom filters
+keystone_result_t res = keystone_tar_zst_search_indexed(
+    fast_tz, "telemetry.csv", 1500, NULL, NULL
+);
+keystone_tar_zst_close(fast_tz);
+```
+
+### 3.3 Multi-Archive Batch Pools
+
+Query pools of partitioned batch archives in parallel:
+
+```c
+const char* archives[] = {
+    "batch_00000.tar.zst",
+    "batch_00001.tar.zst",
+    "batch_00002.tar.zst"
+};
+
+// Opens pool and automatically loads companion .idx.json files if present
+keystone_tar_zst_batch_t* batch = keystone_tar_zst_batch_open(archives, 3, NULL);
+
+size_t matching_archive = 0;
+keystone_result_t result = keystone_tar_zst_batch_search(
+    batch, "events.csv", 987654, NULL, NULL, &matching_archive
+);
+
+if (result != KEYSTONE_NOT_FOUND) {
+    printf("Found key in archive %s at offset %zu\n",
+           archives[matching_archive], result);
+}
+
+keystone_tar_zst_batch_close(batch);
+```
+
+### 3.4 Telemetry Processor Integration
 
 ```c
 #include "dsmil_telemetry_processor.h"
 
-int main() {
-    dsmil_telemetry_processor_t processor;
-    dsmil_telemetry_processor_init(&processor);
+int load_telemetry_example() {
+    dsmil_telemetry_processor_t* processor = dsmil_telemetry_processor_create(10000);
     
-    // Automatically handles decompression, CSV/JSON parsing, and sorting
+    // Decompresses member, parses int64 timestamps, and populates processor
     int rc = dsmil_telemetry_processor_load_from_tar_zst(
-        &processor, 
-        "historical_data.tar.zst", 
-        "sensors_2026.csv"
+        processor, "historical_data.tar.zst", "sensors_2026.csv"
     );
     
     if (rc == DSMIL_SEARCH_SUCCESS) {
         dsmil_telemetry_result_t res;
-        // The processor maintains an optimized internal KEYSTONE index
-        dsmil_telemetry_processor_find_by_device_time(
-            &processor, device_id, target_timestamp, &res
-        );
+        dsmil_telemetry_processor_find_by_timestamp(processor, 1718000000, &res);
+        if (res.is_exact_match) {
+            printf("Found telemetry event at index %zu\n", res.index);
+        }
     }
     
-    dsmil_telemetry_processor_clear(&processor);
+    dsmil_telemetry_processor_destroy(processor);
     return 0;
 }
 ```

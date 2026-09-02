@@ -5,12 +5,12 @@ The DSMIL Telemetry Processor acts as a bridge between KEYSTONE's core `int64_t`
 ## Input and Output Contracts
 
 ### Inputs
-1. **Archive Members**: The processor consumes `.tar.zst` streams. For each requested member, it automatically handles chunked decompression and loads the data into memory.
+1. **Archive Members**: The processor consumes `.tar.zst` streams using either targeted member ingestion (`dsmil_telemetry_processor_load_from_tar_zst`) or bulk ingestion across all recognized member patterns (`dsmil_telemetry_processor_load_all_members`). Decompression is bounded, chunked, and supports multi-threaded ring buffering.
 2. **Key Extraction**:
    - For **CSV**: Parses rows, ignoring header lines if configured. Treats the first valid numeric column (or a specific designated column) as the key. Malformed lines or lines containing non-numeric data are safely ignored.
    - For **JSON**: Looks for arrays of numbers, or specific `"timestamp"`/`"id"` keys, attempting to extract 64-bit integers.
    - For **TXT**: Reads one 64-bit integer per line.
-3. **Sorting**: KEYSTONE requires keys to be strictly monotonic (sorted). If keys are not sorted, the processor will automatically apply an ascending sort in-place before passing them down to the SIMD/Fortran/scalar backends.
+3. **Sorting & Verification**: Extracted keys are sorted in-place, and event timestamps are indexed within the telemetry processor's internal state. When companion `.idx.json` sidecars exist, candidate files and members are pre-filtered via min/max bounds and Bloom filters before decompression begins.
 
 ### Outputs
 1. **Telemetry Results**: 

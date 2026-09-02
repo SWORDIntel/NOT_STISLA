@@ -155,9 +155,31 @@ A native tokenizer extracts identifiers from noisy input. String-like fields can
 
 The optional context model consumes a bounded byte window around a hit and emits one of six semantic classes with confidence gating. This model is deliberately small enough to execute directly in the native pipeline rather than requiring a general ML runtime for every classification.
 
-## Archive Support
+## Archive Support & Streaming Ingestion
 
-When `libarchive` and `libzstd` are available, KEYSTONE can participate directly in `.tar.zst` processing. Member offsets and extracted identifiers can feed the same lookup/index structures used by non-archive data.
+When `libarchive` and `libzstd` are available, KEYSTONE can participate directly in `.tar.zst` processing without inflating archives on disk. Member offsets and extracted identifiers feed the same lookup/index structures used by non-archive data.
+
+### Architectural Capabilities
+
+1. **Persistent Sidecar Indices (`.idx.json`)**:
+   - `keystone_tar_zst_save_index()` and `keystone_tar_zst_load_index()` serialize and restore archive structure (member names, compressed and uncompressed byte offsets, key counts, min/max bounds, and compact Bloom filter bitsets in hexadecimal).
+   - Once generated, `<archive>.idx.json` can be loaded in sub-millisecond time on startup via `options.auto_load_index = 1`, completely bypassing full archive scans.
+
+2. **Memory-Bounded Verification**:
+   - Building or loading an index consumes minimal RAM (retaining only metadata and negative-rejection filters).
+   - If a search query falls within a member's min/max bounds and passes the Bloom filter test, candidate verification streams and parses only the relevant member on demand.
+
+3. **Pipelined Producer-Consumer Ring Buffer (`enable_pipeline`)**:
+   - When `options.enable_pipeline = 1`, an asynchronous decompression thread reads chunks through `libzstd` into a 4-slot ring buffer (`tar_zst_ring_slot_t`), while the worker thread simultaneously parses numeric tokens and builds search buffers.
+   - This overlaps I/O and decompression latency with parsing CPU cycles, saturating memory throughput.
+
+4. **Transparent Rewind & Random Member Access**:
+   - Unlike standard sequential tar streams, `keystone_tar_zst_t` supports non-destructive stream rewinding (`keystone_tar_zst_rewind()`).
+   - Querying or extracting archive members in arbitrary or out-of-order sequences automatically rewinds to the beginning of the archive if the target member precedes the current read position.
+
+5. **Multi-Archive Batch Pools (`keystone_tar_zst_batch_t`)**:
+   - Datasets distributed across partitioned archives (`batch_00000.tar.zst`, `batch_00001.tar.zst`, ...) can be managed as a single logical pool.
+   - Queries across the batch pool execute in parallel with OpenMP, testing pre-loaded sidecar indices in $O(1)$ time to prune non-matching archives before decompressing.
 
 Archive support is optional and is not required by the core numeric search engine.
 

@@ -58,7 +58,7 @@ KEYSTONE combines several focused capabilities behind one native library:
 | **High-volume batch lookup** | Processes large query sets through optimized C, OpenMP, and optional numerical backends. |
 | **Runtime backend calibration** | Measures viable execution paths on the local machine and caches the fastest choice for comparable workloads. |
 | **Unstructured-data ingestion** | Extracts useful identifiers from noisy source data without requiring a heavyweight parsing stack. |
-| **Archive-aware processing** | Supports `.tar.zst` workflows so compressed datasets can participate in the indexing pipeline. |
+| **Archive-aware processing** | High-throughput streaming and indexed search over `.tar.zst` archives with persistent `.idx.json` sidecars, pipelined ring-buffer decompression, and multi-archive batching. |
 | **Context classification** | An optional small native neural model can classify extracted context for downstream triage. |
 | **Vector similarity search** | LSH-indexed cosine/L2/dot similarity over 384-dim float32 vectors with SIMD acceleration and CUDA/VPU paths. |
 | **QIHSE integration** | Can act as a native preprocessing/ingestion layer for the QIHSE database ecosystem. |
@@ -145,9 +145,7 @@ KEYSTONE is a working native library and test/benchmark suite.
 - SSE4.2, AVX, and AVX2 local scan paths where supported;
 - build-gated AVX-512 path;
 - OpenMP batch execution;
-- optional Fortran batch backend;
-- `.tar.zst` archive workflows;
-- unstructured-data tokenizer and hash indexer;
+- `.tar.zst` archive workflows with persistent `.idx.json` sidecars, ring-buffered pipeline decompression, and multi-archive batch pools;
 - native context micro-model;
 - QIHSE bridge support;
 - **vector similarity engine** with LSH coarse indexing, SIMD cosine/L2/dot distance, CUDA and VPU (Myriad X) accelerated paths, and 8-level graceful fallback (scalar always compiled);

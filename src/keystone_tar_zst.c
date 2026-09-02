@@ -16,6 +16,8 @@
 #include <errno.h>
 #include <ctype.h>
 #include <stdarg.h>
+#include <pthread.h>
+#include <unistd.h>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -552,6 +554,9 @@ static void set_error(keystone_tar_zst_t* tz, const char* fmt, ...) {
  * Public API
  * ============================================================================ */
 
+/* Forward declarations */
+int keystone_tar_zst_load_index(keystone_tar_zst_t* tz, const char* path);
+
 keystone_tar_zst_t* keystone_tar_zst_open(const char* path,
                                               const keystone_tar_zst_options_t* opts) {
     if (!path) return NULL;
@@ -564,6 +569,8 @@ keystone_tar_zst_t* keystone_tar_zst_open(const char* path,
     tz->options.arena_slab_size = 1u << 20;
     tz->options.zstd_workers = 0;
     tz->options.enable_pipeline = 0;
+    tz->options.auto_load_index = 0;
+    tz->options.retain_keys = 0;
     tz->options.skip_header = 0;
 
     if (opts) {
@@ -587,6 +594,12 @@ keystone_tar_zst_t* keystone_tar_zst_open(const char* path,
     archive_read_support_filter_zstd(tz->archive);
     archive_read_support_filter_all(tz->archive);
 
+    if (tz->options.zstd_workers > 1) {
+        char opt[64];
+        snprintf(opt, sizeof(opt), "%d", tz->options.zstd_workers);
+        archive_read_set_option(tz->archive, "zstd", "threads", opt);
+    }
+
     int r = archive_read_open_filename(tz->archive, path, tz->options.chunk_size);
     if (r != ARCHIVE_OK) {
         set_error(tz, "archive_read_open_filename failed: %s",
@@ -605,7 +618,53 @@ keystone_tar_zst_t* keystone_tar_zst_open(const char* path,
         return NULL;
     }
 
+    /* Auto-load accompanying index if requested or if <path>.idx.json exists */
+    if (tz->options.auto_load_index) {
+        char idx_path[1024];
+        snprintf(idx_path, sizeof(idx_path), "%s.idx.json", path);
+        if (access(idx_path, R_OK) == 0) {
+            keystone_tar_zst_load_index(tz, idx_path);
+        }
+    }
+
     return tz;
+}
+
+int keystone_tar_zst_rewind(keystone_tar_zst_t* tz) {
+    if (!tz || !tz->archive_path) return -1;
+    if (tz->archive) {
+        archive_read_free(tz->archive);
+        tz->archive = NULL;
+    }
+    tz->archive = archive_read_new();
+    if (!tz->archive) {
+        set_error(tz, "Failed to allocate archive on rewind");
+        return -1;
+    }
+    archive_read_support_format_tar(tz->archive);
+    archive_read_support_filter_zstd(tz->archive);
+    archive_read_support_filter_all(tz->archive);
+
+    if (tz->options.zstd_workers > 1) {
+        char opt[64];
+        snprintf(opt, sizeof(opt), "%d", tz->options.zstd_workers);
+        archive_read_set_option(tz->archive, "zstd", "threads", opt);
+    }
+
+    int r = archive_read_open_filename(tz->archive, tz->archive_path, tz->options.chunk_size);
+    if (r != ARCHIVE_OK) {
+        set_error(tz, "archive_read_open_filename failed on rewind: %s",
+                  archive_error_string(tz->archive));
+        archive_read_free(tz->archive);
+        tz->archive = NULL;
+        return -1;
+    }
+
+    tz->current_entry = NULL;
+    tz->member_name[0] = '\0';
+    tz->member_name_len = 0;
+    tz->at_eof = 0;
+    return 0;
 }
 
 void keystone_tar_zst_close(keystone_tar_zst_t* tz) {
@@ -661,6 +720,84 @@ int keystone_tar_zst_next_member(keystone_tar_zst_t* tz,
     return 1;
 }
 
+/* ============================================================================
+ * Producer-Consumer Ring Buffer Pipeline
+ * ============================================================================ */
+
+#define TAR_ZST_RING_SLOTS 4
+
+typedef struct {
+    char* data;
+    ssize_t len;
+} tar_zst_ring_slot_t;
+
+typedef struct {
+    tar_zst_ring_slot_t slots[TAR_ZST_RING_SLOTS];
+    size_t head;
+    size_t tail;
+    size_t count;
+    int done;
+    int error;
+    char error_msg[256];
+    pthread_mutex_t lock;
+    pthread_cond_t cv_can_produce;
+    pthread_cond_t cv_can_consume;
+    struct archive* archive;
+    size_t chunk_size;
+    uint64_t max_bytes;
+    uint64_t bytes_read;
+    uint64_t decompress_time_ns;
+} tar_zst_pipeline_t;
+
+static void* tar_zst_pipeline_worker(void* arg) {
+    tar_zst_pipeline_t* p = (tar_zst_pipeline_t*)arg;
+    for (;;) {
+        pthread_mutex_lock(&p->lock);
+        while (p->count == TAR_ZST_RING_SLOTS && !p->done) {
+            pthread_cond_wait(&p->cv_can_produce, &p->lock);
+        }
+        if (p->done) {
+            pthread_mutex_unlock(&p->lock);
+            break;
+        }
+        size_t slot_idx = p->head;
+        pthread_mutex_unlock(&p->lock);
+
+        uint64_t t0 = ns_now();
+        ssize_t n = archive_read_data(p->archive, p->slots[slot_idx].data, p->chunk_size);
+        uint64_t dt = ns_now() - t0;
+
+        pthread_mutex_lock(&p->lock);
+        p->decompress_time_ns += dt;
+        if (n < 0) {
+            p->error = 1;
+            p->done = 1;
+            snprintf(p->error_msg, sizeof(p->error_msg), "%s", archive_error_string(p->archive));
+            pthread_cond_signal(&p->cv_can_consume);
+            pthread_mutex_unlock(&p->lock);
+            break;
+        }
+        p->slots[slot_idx].len = n;
+        p->bytes_read += (uint64_t)n;
+        p->head = (p->head + 1) % TAR_ZST_RING_SLOTS;
+        p->count++;
+        pthread_cond_signal(&p->cv_can_consume);
+
+        if (n == 0 || p->bytes_read > p->max_bytes) {
+            if (p->bytes_read > p->max_bytes) {
+                p->error = 1;
+                snprintf(p->error_msg, sizeof(p->error_msg), "Member exceeds max decompression size");
+            }
+            p->done = 1;
+            pthread_cond_signal(&p->cv_can_consume);
+            pthread_mutex_unlock(&p->lock);
+            break;
+        }
+        pthread_mutex_unlock(&p->lock);
+    }
+    return NULL;
+}
+
 /* Stream the current entry chunk-by-chunk through the bounded parser.
  * This avoids buffering the entire decompressed member and eliminates
  * the strtoll() OOB-read hazard.  Numbers split across chunk boundaries
@@ -707,41 +844,119 @@ static int tar_zst_parse_current_entry(keystone_tar_zst_t* tz,
     size_t chunk_size = tz->options.chunk_size;
     if (chunk_size < 4096) chunk_size = 4096;
 
-    uint64_t t0_decompress = ns_now();
-    ssize_t bytes_total = 0;
+    if (tz->options.enable_pipeline) {
+        tar_zst_pipeline_t pipe;
+        memset(&pipe, 0, sizeof(pipe));
+        pipe.archive = tz->archive;
+        pipe.chunk_size = chunk_size;
+        pipe.max_bytes = KEYSTONE_TAR_ZST_MAX_DECOMPRESS_BYTES;
+        pthread_mutex_init(&pipe.lock, NULL);
+        pthread_cond_init(&pipe.cv_can_produce, NULL);
+        pthread_cond_init(&pipe.cv_can_consume, NULL);
 
-    char* chunk = malloc(chunk_size);
-    if (!chunk) {
-        set_error(tz, "Out of memory allocating chunk buffer");
-        return -1;
-    }
-
-    for (;;) {
-        ssize_t n = archive_read_data(tz->archive, chunk, chunk_size);
-        if (n < 0) {
-            set_error(tz, "archive_read_data failed: %s",
-                      archive_error_string(tz->archive));
-            free(chunk);
-            return -1;
-        }
-        if (n == 0) break;
-        bytes_total += n;
-        if ((uint64_t)bytes_total > KEYSTONE_TAR_ZST_MAX_DECOMPRESS_BYTES) {
-            set_error(tz, "Member exceeds max decompression size (%llu bytes)",
-                      (unsigned long long)KEYSTONE_TAR_ZST_MAX_DECOMPRESS_BYTES);
-            free(chunk);
-            return -1;
+        for (int i = 0; i < TAR_ZST_RING_SLOTS; i++) {
+            pipe.slots[i].data = malloc(chunk_size);
+            if (!pipe.slots[i].data) {
+                set_error(tz, "Out of memory allocating pipeline slot");
+                for (int j = 0; j < i; j++) free(pipe.slots[j].data);
+                pthread_mutex_destroy(&pipe.lock);
+                pthread_cond_destroy(&pipe.cv_can_produce);
+                pthread_cond_destroy(&pipe.cv_can_consume);
+                return -1;
+            }
         }
 
-        uint64_t t0_parse = ns_now();
-        parse_feed(&tz->parse_ctx, chunk, (size_t)n);
-        tz->stats.parse_time_ns += ns_now() - t0_parse;
-    }
+        pthread_t prod_thread;
+        if (pthread_create(&prod_thread, NULL, tar_zst_pipeline_worker, &pipe) != 0) {
+            for (int i = 0; i < TAR_ZST_RING_SLOTS; i++) free(pipe.slots[i].data);
+            pthread_mutex_destroy(&pipe.lock);
+            pthread_cond_destroy(&pipe.cv_can_produce);
+            pthread_cond_destroy(&pipe.cv_can_consume);
+            set_error(tz, "Failed to create pipeline producer thread");
+            return -1;
+        }
 
-    free(chunk);
-    tz->stats.decompress_time_ns += ns_now() - t0_decompress;
-    tz->stats.bytes_read += (uint64_t)bytes_total;
-    tz->stats.members_read++;
+        for (;;) {
+            pthread_mutex_lock(&pipe.lock);
+            while (pipe.count == 0 && !pipe.done && !pipe.error) {
+                pthread_cond_wait(&pipe.cv_can_consume, &pipe.lock);
+            }
+            if (pipe.count == 0) {
+                int err = pipe.error;
+                pthread_mutex_unlock(&pipe.lock);
+                if (err) {
+                    set_error(tz, "%s", pipe.error_msg);
+                    pthread_join(prod_thread, NULL);
+                    for (int i = 0; i < TAR_ZST_RING_SLOTS; i++) free(pipe.slots[i].data);
+                    pthread_mutex_destroy(&pipe.lock);
+                    pthread_cond_destroy(&pipe.cv_can_produce);
+                    pthread_cond_destroy(&pipe.cv_can_consume);
+                    return -1;
+                }
+                break;
+            }
+
+            size_t slot_idx = pipe.tail;
+            ssize_t n = pipe.slots[slot_idx].len;
+            char* buf = pipe.slots[slot_idx].data;
+            pipe.tail = (pipe.tail + 1) % TAR_ZST_RING_SLOTS;
+            pipe.count--;
+            pthread_cond_signal(&pipe.cv_can_produce);
+            pthread_mutex_unlock(&pipe.lock);
+
+            if (n <= 0) break;
+
+            uint64_t t0_parse = ns_now();
+            parse_feed(&tz->parse_ctx, buf, (size_t)n);
+            tz->stats.parse_time_ns += ns_now() - t0_parse;
+        }
+
+        pthread_join(prod_thread, NULL);
+        tz->stats.decompress_time_ns += pipe.decompress_time_ns;
+        tz->stats.bytes_read += pipe.bytes_read;
+        tz->stats.members_read++;
+
+        for (int i = 0; i < TAR_ZST_RING_SLOTS; i++) free(pipe.slots[i].data);
+        pthread_mutex_destroy(&pipe.lock);
+        pthread_cond_destroy(&pipe.cv_can_produce);
+        pthread_cond_destroy(&pipe.cv_can_consume);
+    } else {
+        uint64_t t0_decompress = ns_now();
+        ssize_t bytes_total = 0;
+
+        char* chunk = malloc(chunk_size);
+        if (!chunk) {
+            set_error(tz, "Out of memory allocating chunk buffer");
+            return -1;
+        }
+
+        for (;;) {
+            ssize_t n = archive_read_data(tz->archive, chunk, chunk_size);
+            if (n < 0) {
+                set_error(tz, "archive_read_data failed: %s",
+                          archive_error_string(tz->archive));
+                free(chunk);
+                return -1;
+            }
+            if (n == 0) break;
+            bytes_total += n;
+            if ((uint64_t)bytes_total > KEYSTONE_TAR_ZST_MAX_DECOMPRESS_BYTES) {
+                set_error(tz, "Member exceeds max decompression size (%llu bytes)",
+                          (unsigned long long)KEYSTONE_TAR_ZST_MAX_DECOMPRESS_BYTES);
+                free(chunk);
+                return -1;
+            }
+
+            uint64_t t0_parse = ns_now();
+            parse_feed(&tz->parse_ctx, chunk, (size_t)n);
+            tz->stats.parse_time_ns += ns_now() - t0_parse;
+        }
+
+        free(chunk);
+        tz->stats.decompress_time_ns += ns_now() - t0_decompress;
+        tz->stats.bytes_read += (uint64_t)bytes_total;
+        tz->stats.members_read++;
+    }
 
     /* Flush any number pending at end-of-member */
     parse_finish(&tz->parse_ctx);
@@ -764,7 +979,7 @@ static int tar_zst_parse_current_entry(keystone_tar_zst_t* tz,
     return 0;
 }
 
-keystone_result_t keystone_tar_zst_search_member(
+static keystone_result_t keystone_tar_zst_search_member_raw(
     keystone_tar_zst_t* tz,
     const char* member_name,
     int64_t key,
@@ -772,16 +987,10 @@ keystone_result_t keystone_tar_zst_search_member(
     const keystone_config_t* config) {
     if (!tz || !member_name) return KEYSTONE_NOT_FOUND;
 
-    /* If indexed, jump directly */
-    if (tz->index_built && tz->index) {
-        return keystone_tar_zst_search_indexed(tz, member_name, key, table, config);
-    }
-
-    /* Otherwise linear scan from current position */
+    /* Linear scan from current position; if not found, rewind and scan from start */
     if (!tz->current_entry ||
         tz->member_name_len != strlen(member_name) ||
         memcmp(tz->member_name, member_name, tz->member_name_len) != 0) {
-        /* Need to find the member */
         int found = 0;
         for (;;) {
             int r = keystone_tar_zst_next_member(tz, NULL, NULL);
@@ -790,6 +999,19 @@ keystone_result_t keystone_tar_zst_search_member(
                 memcmp(tz->member_name, member_name, tz->member_name_len) == 0) {
                 found = 1;
                 break;
+            }
+        }
+        if (!found) {
+            if (keystone_tar_zst_rewind(tz) == 0) {
+                for (;;) {
+                    int r = keystone_tar_zst_next_member(tz, NULL, NULL);
+                    if (r <= 0) break;
+                    if (tz->member_name_len == strlen(member_name) &&
+                        memcmp(tz->member_name, member_name, tz->member_name_len) == 0) {
+                        found = 1;
+                        break;
+                    }
+                }
             }
         }
         if (!found) {
@@ -818,6 +1040,22 @@ keystone_result_t keystone_tar_zst_search_member(
     return result;
 }
 
+keystone_result_t keystone_tar_zst_search_member(
+    keystone_tar_zst_t* tz,
+    const char* member_name,
+    int64_t key,
+    keystone_anchor_table_t* table,
+    const keystone_config_t* config) {
+    if (!tz || !member_name) return KEYSTONE_NOT_FOUND;
+
+    /* If indexed, jump directly */
+    if (tz->index_built && tz->index) {
+        return keystone_tar_zst_search_indexed(tz, member_name, key, table, config);
+    }
+
+    return keystone_tar_zst_search_member_raw(tz, member_name, key, table, config);
+}
+
 size_t keystone_tar_zst_search_member_batch(
     keystone_tar_zst_t* tz,
     const char* member_name,
@@ -843,6 +1081,19 @@ size_t keystone_tar_zst_search_member_batch(
                 memcmp(tz->member_name, member_name, tz->member_name_len) == 0) {
                 found = 1;
                 break;
+            }
+        }
+        if (!found) {
+            if (keystone_tar_zst_rewind(tz) == 0) {
+                for (;;) {
+                    int r = keystone_tar_zst_next_member(tz, NULL, NULL);
+                    if (r <= 0) break;
+                    if (tz->member_name_len == strlen(member_name) &&
+                        memcmp(tz->member_name, member_name, tz->member_name_len) == 0) {
+                        found = 1;
+                        break;
+                    }
+                }
             }
         }
         if (!found) {
@@ -888,6 +1139,19 @@ int keystone_tar_zst_extract_member(
             }
         }
         if (!found) {
+            if (keystone_tar_zst_rewind(tz) == 0) {
+                for (;;) {
+                    int r = keystone_tar_zst_next_member(tz, NULL, NULL);
+                    if (r <= 0) break;
+                    if (tz->member_name_len == strlen(member_name) &&
+                        memcmp(tz->member_name, member_name, tz->member_name_len) == 0) {
+                        found = 1;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!found) {
             set_error(tz, "Member not found: %s", member_name);
             return -1;
         }
@@ -922,6 +1186,9 @@ int keystone_tar_zst_build_index(keystone_tar_zst_t* tz) {
         int r = keystone_tar_zst_next_member(tz, NULL, NULL);
         if (r <= 0) break;
 
+        uint64_t comp_off = (uint64_t)archive_filter_bytes(tz->archive, -1);
+        uint64_t uncomp_off = tz->stats.bytes_read;
+
         int64_t* keys = NULL;
         size_t count = 0;
         int64_t first_key = 0, last_key = 0;
@@ -939,14 +1206,14 @@ int keystone_tar_zst_build_index(keystone_tar_zst_t* tz) {
         }
 
         tar_zst_index_add(tz->index, tz->member_name, tz->member_name_len,
-                           0, 0, count, first_key, last_key, bloom,
-                           (keys && count > 0) ? keys : NULL);
+                           comp_off, uncomp_off, count, first_key, last_key, bloom,
+                           (tz->options.retain_keys && keys && count > 0) ? keys : NULL);
     }
 
     tz->index_built = 1;
 
-    /* Store archive path for reopen in search_indexed */
-    /* Already stored in tz->archive_path from keystone_tar_zst_open */
+    /* Rewind archive so subsequent member reads start from beginning */
+    keystone_tar_zst_rewind(tz);
 
     return 0;
 }
@@ -979,9 +1246,7 @@ keystone_result_t keystone_tar_zst_search_indexed(
         return KEYSTONE_NOT_FOUND;
     }
 
-    /* Fast path: search the retained sorted keys directly — no
-     * decompression, no reopen, no re-parse.  This turns the index
-     * from a negative-only accelerator into a real positive index. */
+    /* Fast path: search the retained sorted keys directly if retained in memory */
     if (entry->keys && entry->key_count > 0) {
         keystone_config_t default_config;
         if (!config) {
@@ -992,25 +1257,373 @@ keystone_result_t keystone_tar_zst_search_indexed(
                                           key, table, config);
     }
 
-    /* Fallback: keys were not retained — reopen archive and verify by
-     * streaming.  This path is only hit if key retention failed at
-     * index-build time (e.g. memory pressure). */
-    if (!tz->archive_path) {
-        set_error(tz, "Archive path not available for reopen");
-        return KEYSTONE_NOT_FOUND;
+    /* Keys were not retained in RAM to save memory: stream-verify candidate member directly */
+    return keystone_tar_zst_search_member_raw(tz, member_name, key, table, config);
+}
+
+/* ============================================================================
+ * JSON Index Serialization (.idx.json)
+ * ============================================================================ */
+
+int keystone_tar_zst_save_index(keystone_tar_zst_t* tz, const char* path) {
+    if (!tz || !tz->index || !tz->index_built) {
+        if (tz) set_error(tz, "Index not built");
+        return -1;
+    }
+    char default_path[1024];
+    if (!path) {
+        if (!tz->archive_path) {
+            set_error(tz, "No archive path for default index file");
+            return -1;
+        }
+        snprintf(default_path, sizeof(default_path), "%s.idx.json", tz->archive_path);
+        path = default_path;
     }
 
-    keystone_tar_zst_t* tz2 = keystone_tar_zst_open(tz->archive_path, &tz->options);
-    if (!tz2) {
-        set_error(tz, "Failed to reopen archive for indexed search");
-        return KEYSTONE_NOT_FOUND;
+    FILE* fp = fopen(path, "w");
+    if (!fp) {
+        set_error(tz, "Cannot open index file for writing: %s", path);
+        return -1;
     }
 
-    keystone_result_t result = keystone_tar_zst_search_member(
-        tz2, member_name, key, table, config);
+    fprintf(fp, "{\n  \"version\": 1,\n  \"archive\": \"%s\",\n  \"members\": [\n",
+            tz->archive_path ? tz->archive_path : "");
 
-    keystone_tar_zst_close(tz2);
-    return result;
+    int first = 1;
+    for (size_t b = 0; b < TAR_ZST_INDEX_BUCKETS; b++) {
+        tar_zst_index_entry_t* entries = tz->index->buckets[b];
+        for (size_t i = 0; i < tz->index->bucket_counts[b]; i++) {
+            tar_zst_index_entry_t* e = &entries[i];
+            if (!first) fprintf(fp, ",\n");
+            first = 0;
+
+            fprintf(fp, "    {\n");
+            fprintf(fp, "      \"name\": \"%s\",\n", e->name);
+            fprintf(fp, "      \"compressed_offset\": %llu,\n", (unsigned long long)e->compressed_offset);
+            fprintf(fp, "      \"uncompressed_offset\": %llu,\n", (unsigned long long)e->uncompressed_offset);
+            fprintf(fp, "      \"key_count\": %zu,\n", e->key_count);
+            fprintf(fp, "      \"first_key\": %lld,\n", (long long)e->first_key);
+            fprintf(fp, "      \"last_key\": %lld", (long long)e->last_key);
+
+            if (e->bloom && e->bloom->bits) {
+                fprintf(fp, ",\n      \"bloom_bits\": %zu,\n", e->bloom->num_bits);
+                fprintf(fp, "      \"bloom_hashes\": %zu,\n", e->bloom->num_hashes);
+                fprintf(fp, "      \"bloom_hex\": \"");
+                size_t words = (e->bloom->num_bits + 63) / 64;
+                for (size_t w = 0; w < words; w++) {
+                    fprintf(fp, "%016llx", (unsigned long long)e->bloom->bits[w]);
+                }
+                fprintf(fp, "\"\n");
+            } else {
+                fprintf(fp, "\n");
+            }
+            fprintf(fp, "    }");
+        }
+    }
+    fprintf(fp, "\n  ]\n}\n");
+    fclose(fp);
+    return 0;
+}
+
+static const char* json_skip_ws(const char* p) {
+    while (*p && isspace((unsigned char)*p)) p++;
+    return p;
+}
+
+static const char* json_find_key(const char* obj_start, const char* obj_end, const char* key) {
+    size_t klen = strlen(key);
+    const char* p = obj_start;
+    while (p && p < obj_end) {
+        p = strstr(p, key);
+        if (!p || p >= obj_end) return NULL;
+        /* check preceding quote */
+        if (p > obj_start && *(p - 1) == '"') {
+            const char* after = p + klen;
+            if (*after == '"') {
+                after++;
+                after = json_skip_ws(after);
+                if (*after == ':') {
+                    return json_skip_ws(after + 1);
+                }
+            }
+        }
+        p += klen;
+    }
+    return NULL;
+}
+
+int keystone_tar_zst_load_index(keystone_tar_zst_t* tz, const char* path) {
+    if (!tz) return -1;
+    char default_path[1024];
+    if (!path) {
+        if (!tz->archive_path) {
+            set_error(tz, "No archive path for default index file");
+            return -1;
+        }
+        snprintf(default_path, sizeof(default_path), "%s.idx.json", tz->archive_path);
+        path = default_path;
+    }
+
+    FILE* fp = fopen(path, "rb");
+    if (!fp) {
+        set_error(tz, "Cannot open index file for reading: %s", path);
+        return -1;
+    }
+
+    fseek(fp, 0, SEEK_END);
+    long fsize = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    if (fsize <= 0 || fsize > (50L * 1024 * 1024)) {
+        fclose(fp);
+        set_error(tz, "Invalid index file size");
+        return -1;
+    }
+
+    char* json = malloc(fsize + 1);
+    if (!json) {
+        fclose(fp);
+        set_error(tz, "Out of memory reading index file");
+        return -1;
+    }
+
+    size_t read_bytes = fread(json, 1, fsize, fp);
+    fclose(fp);
+    json[read_bytes] = '\0';
+
+    if (tz->index) {
+        tar_zst_index_destroy(tz->index);
+    }
+    tz->index = tar_zst_index_create();
+    if (!tz->index) {
+        free(json);
+        set_error(tz, "Failed to allocate index");
+        return -1;
+    }
+
+    const char* members_key = strstr(json, "\"members\"");
+    if (!members_key) {
+        free(json);
+        set_error(tz, "Missing members array in index file");
+        return -1;
+    }
+
+    const char* arr_start = strchr(members_key, '[');
+    if (!arr_start) {
+        free(json);
+        set_error(tz, "Malformed members array in index file");
+        return -1;
+    }
+
+    const char* p = arr_start + 1;
+    while (*p) {
+        p = strchr(p, '{');
+        if (!p) break;
+        const char* obj_start = p;
+        int depth = 1;
+        const char* q = obj_start + 1;
+        while (*q && depth > 0) {
+            if (*q == '{') depth++;
+            else if (*q == '}') depth--;
+            q++;
+        }
+        if (depth != 0) break;
+        const char* obj_end = q;
+
+        char name[512] = {0};
+        uint64_t comp_off = 0;
+        uint64_t uncomp_off = 0;
+        size_t key_count = 0;
+        int64_t first_key = 0;
+        int64_t last_key = 0;
+        size_t bloom_bits = 0;
+        size_t bloom_hashes = 2;
+        tar_zst_bloom_t* bloom = NULL;
+
+        const char* val = json_find_key(obj_start, obj_end, "name");
+        if (val && *val == '"') {
+            val++;
+            const char* name_end = strchr(val, '"');
+            if (name_end && (size_t)(name_end - val) < sizeof(name)) {
+                memcpy(name, val, name_end - val);
+                name[name_end - val] = '\0';
+            }
+        }
+
+        val = json_find_key(obj_start, obj_end, "compressed_offset");
+        if (val) comp_off = (uint64_t)strtoull(val, NULL, 10);
+
+        val = json_find_key(obj_start, obj_end, "uncompressed_offset");
+        if (val) uncomp_off = (uint64_t)strtoull(val, NULL, 10);
+
+        val = json_find_key(obj_start, obj_end, "key_count");
+        if (val) key_count = (size_t)strtoull(val, NULL, 10);
+
+        val = json_find_key(obj_start, obj_end, "first_key");
+        if (val) first_key = (int64_t)strtoll(val, NULL, 10);
+
+        val = json_find_key(obj_start, obj_end, "last_key");
+        if (val) last_key = (int64_t)strtoll(val, NULL, 10);
+
+        val = json_find_key(obj_start, obj_end, "bloom_bits");
+        if (val) bloom_bits = (size_t)strtoull(val, NULL, 10);
+
+        val = json_find_key(obj_start, obj_end, "bloom_hashes");
+        if (val) bloom_hashes = (size_t)strtoull(val, NULL, 10);
+
+        val = json_find_key(obj_start, obj_end, "bloom_hex");
+        if (val && *val == '"' && bloom_bits > 0) {
+            val++;
+            size_t words = (bloom_bits + 63) / 64;
+            bloom = calloc(1, sizeof(tar_zst_bloom_t));
+            if (bloom) {
+                bloom->bits = calloc(words, sizeof(uint64_t));
+                if (bloom->bits) {
+                    bloom->num_bits = bloom_bits;
+                    bloom->num_hashes = bloom_hashes;
+                    for (size_t w = 0; w < words; w++) {
+                        char word_hex[17];
+                        memcpy(word_hex, val + (w * 16), 16);
+                        word_hex[16] = '\0';
+                        bloom->bits[w] = (uint64_t)strtoull(word_hex, NULL, 16);
+                    }
+                } else {
+                    free(bloom);
+                    bloom = NULL;
+                }
+            }
+        }
+
+        if (name[0]) {
+            tar_zst_index_add(tz->index, name, strlen(name),
+                              comp_off, uncomp_off, key_count,
+                              first_key, last_key, bloom, NULL);
+        }
+
+        p = obj_end;
+    }
+
+    free(json);
+    tz->index_built = 1;
+    return 0;
+}
+
+/* ============================================================================
+ * Multi-Archive Batch API
+ * ============================================================================ */
+
+struct keystone_tar_zst_batch {
+    keystone_tar_zst_t** archives;
+    char** paths;
+    size_t count;
+    keystone_tar_zst_options_t options;
+};
+
+keystone_tar_zst_batch_t* keystone_tar_zst_batch_open(
+    const char** archive_paths,
+    size_t num_archives,
+    const keystone_tar_zst_options_t* opts) {
+    if (!archive_paths || num_archives == 0) return NULL;
+
+    keystone_tar_zst_batch_t* batch = calloc(1, sizeof(keystone_tar_zst_batch_t));
+    if (!batch) return NULL;
+
+    batch->count = num_archives;
+    if (opts) {
+        batch->options = *opts;
+    } else {
+        memset(&batch->options, 0, sizeof(batch->options));
+        batch->options.format = KEYSTONE_TAR_ZST_FORMAT_AUTO;
+        batch->options.chunk_size = 256 * 1024;
+        batch->options.arena_slab_size = 1u << 20;
+    }
+    batch->options.auto_load_index = 1;
+
+    batch->archives = calloc(num_archives, sizeof(keystone_tar_zst_t*));
+    batch->paths = calloc(num_archives, sizeof(char*));
+    if (!batch->archives || !batch->paths) {
+        keystone_tar_zst_batch_close(batch);
+        return NULL;
+    }
+
+    for (size_t i = 0; i < num_archives; i++) {
+        batch->paths[i] = strdup(archive_paths[i]);
+        batch->archives[i] = keystone_tar_zst_open(archive_paths[i], &batch->options);
+        if (!batch->archives[i]) {
+            keystone_tar_zst_batch_close(batch);
+            return NULL;
+        }
+    }
+
+    return batch;
+}
+
+void keystone_tar_zst_batch_close(keystone_tar_zst_batch_t* batch) {
+    if (!batch) return;
+    if (batch->archives) {
+        for (size_t i = 0; i < batch->count; i++) {
+            if (batch->archives[i]) {
+                keystone_tar_zst_close(batch->archives[i]);
+            }
+        }
+        free(batch->archives);
+    }
+    if (batch->paths) {
+        for (size_t i = 0; i < batch->count; i++) {
+            free(batch->paths[i]);
+        }
+        free(batch->paths);
+    }
+    free(batch);
+}
+
+keystone_result_t keystone_tar_zst_batch_search(
+    keystone_tar_zst_batch_t* batch,
+    const char* member_name,
+    int64_t key,
+    keystone_anchor_table_t* table,
+    const keystone_config_t* config,
+    size_t* out_archive_idx) {
+    if (!batch || !member_name || batch->count == 0) return KEYSTONE_NOT_FOUND;
+
+    keystone_result_t match_res = KEYSTONE_NOT_FOUND;
+    size_t match_idx = (size_t)-1;
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+    for (size_t i = 0; i < batch->count; i++) {
+        if (match_res != KEYSTONE_NOT_FOUND) continue;
+
+        keystone_tar_zst_t* tz = batch->archives[i];
+        if (!tz) continue;
+
+        /* Fast O(1) negative filter rejection before decompressing/searching */
+        if (tz->index_built && tz->index) {
+            tar_zst_index_entry_t* entry = tar_zst_index_find(tz->index, member_name, strlen(member_name));
+            if (!entry) continue;
+            if (key < entry->first_key || key > entry->last_key) continue;
+            if (entry->bloom && !tar_zst_bloom_may_contain(entry->bloom, key)) continue;
+        }
+
+        keystone_result_t r = keystone_tar_zst_search_member(tz, member_name, key, table, config);
+        if (r != KEYSTONE_NOT_FOUND) {
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+            {
+                if (match_res == KEYSTONE_NOT_FOUND) {
+                    match_res = r;
+                    match_idx = i;
+                }
+            }
+        }
+    }
+
+    if (match_res != KEYSTONE_NOT_FOUND && out_archive_idx) {
+        *out_archive_idx = match_idx;
+    }
+    return match_res;
 }
 
 /* ============================================================================

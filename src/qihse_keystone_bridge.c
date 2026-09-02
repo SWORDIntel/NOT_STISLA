@@ -81,6 +81,11 @@ int keystone_qihse_bridge_dispatch_credential(
     if (!g_bridge_active) return -1;
     if (!email || !pass) return -1;
 
+    /* If an ingestion principal is configured, enforce authenticated write */
+    if (g_bridge_cfg.ingestion_principal) {
+        return keystone_qihse_bridge_dispatch_credential_authenticated(email, pass, semantic_class);
+    }
+
     qihse_kv_store_t* kv = (qihse_kv_store_t*)g_bridge_cfg.kv_target;
     uint16_t clearance   = g_bridge_cfg.default_clearance;
     uint16_t compartment = g_bridge_cfg.default_compartment;

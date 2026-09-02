@@ -42,19 +42,27 @@ static void radix_sort_lsd_64(
         goto fallback_qsort;
     }
 
+    int64_t*  src_keys    = keys;
+    uint64_t* src_offsets = offsets;
+    char**    src_strings = strings;
+    size_t*   src_lens    = string_lens;
+
+    int64_t*  dst_keys    = tmp_keys;
+    uint64_t* dst_offsets = tmp_offsets;
+    char**    dst_strings = tmp_strings;
+    size_t*   dst_lens    = tmp_lens;
+
     /* LSD radix sort: 8 passes x 8 bits.
-     * We sort on the unsigned interpretation of the 64-bit hash to get
-     * a consistent ordering (KEYSTONE just needs sorted, not a specific
-     * signed ordering).  Flip the sign bit so signed and unsigned order
-     * agree, then flip back at the end — but actually KEYSTONE's search
-     * works on any total order, so we just sort by the bit pattern. */
+     * With 8 passes (an even number), pointer ping-ponging between the original
+     * and temporary arrays leaves the sorted data directly in the original
+     * caller-provided arrays on the final pass with ZERO memcpys. */
     for (int pass = 0; pass < 8; pass++) {
         int shift = pass * 8;
         size_t hist[256] = {0};
 
         /* Histogram */
         for (size_t i = 0; i < count; i++) {
-            uint8_t bucket = (uint8_t)((uint64_t)keys[i] >> shift);
+            uint8_t bucket = (uint8_t)((uint64_t)src_keys[i] >> shift);
             hist[bucket]++;
         }
 
@@ -66,21 +74,21 @@ static void radix_sort_lsd_64(
             accum += hist[b];
         }
 
-        /* Scatter into temp arrays */
+        /* Scatter from src into dst */
         for (size_t i = 0; i < count; i++) {
-            uint8_t bucket = (uint8_t)((uint64_t)keys[i] >> shift);
+            uint8_t bucket = (uint8_t)((uint64_t)src_keys[i] >> shift);
             size_t dst = pos[bucket]++;
-            tmp_keys[dst]    = keys[i];
-            tmp_offsets[dst] = offsets[i];
-            tmp_strings[dst] = strings[i];
-            tmp_lens[dst]    = string_lens[i];
+            dst_keys[dst]    = src_keys[i];
+            dst_offsets[dst] = src_offsets[i];
+            dst_strings[dst] = src_strings[i];
+            dst_lens[dst]    = src_lens[i];
         }
 
-        /* Swap back */
-        memcpy(keys, tmp_keys, count * sizeof(int64_t));
-        memcpy(offsets, tmp_offsets, count * sizeof(uint64_t));
-        memcpy(strings, tmp_strings, count * sizeof(char*));
-        memcpy(string_lens, tmp_lens, count * sizeof(size_t));
+        /* Ping-pong pointers: swap src and dst for the next pass */
+        int64_t*  tk = src_keys;    src_keys = dst_keys;       dst_keys = tk;
+        uint64_t* to = src_offsets; src_offsets = dst_offsets; dst_offsets = to;
+        char**    ts = src_strings; src_strings = dst_strings; dst_strings = ts;
+        size_t*   tl = src_lens;    src_lens = dst_lens;       dst_lens = tl;
     }
 
     free(tmp_keys);

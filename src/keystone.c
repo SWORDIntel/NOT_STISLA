@@ -1582,10 +1582,7 @@ typedef struct keystone_backend_cache_entry {
 
 static keystone_backend_cache_entry_t g_backend_cache[KEYSTONE_AUTO_CACHE_ENTRIES];
 static _Atomic size_t g_backend_cache_next = 0;
-/* Protects g_backend_cache entries against publication races: without this,
- * a writer can set valid=1 before the rest of the entry is initialized,
- * and a concurrent reader sees partially-populated fields. */
-static pthread_mutex_t g_backend_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_rwlock_t g_backend_cache_rwlock = PTHREAD_RWLOCK_INITIALIZER;
 
 static size_t keystone_power_of_two_bucket(size_t value) {
     if (value <= 1) {
@@ -1710,8 +1707,8 @@ static int keystone_find_backend_cache(uint32_t cpu_features,
                                          size_t query_count_bucket,
                                          int thread_count,
                                          int query_shape,
-                                         keystone_backend_cache_entry_t* entry) {
-    pthread_mutex_lock(&g_backend_cache_mutex);
+                                          keystone_backend_cache_entry_t* entry) {
+    pthread_rwlock_rdlock(&g_backend_cache_rwlock);
     for (size_t i = 0; i < KEYSTONE_AUTO_CACHE_ENTRIES; ++i) {
         const keystone_backend_cache_entry_t* current = &g_backend_cache[i];
         if (!current->valid) {
@@ -1725,11 +1722,11 @@ static int keystone_find_backend_cache(uint32_t cpu_features,
             if (entry) {
                 *entry = *current;
             }
-            pthread_mutex_unlock(&g_backend_cache_mutex);
+            pthread_rwlock_unlock(&g_backend_cache_rwlock);
             return 1;
         }
     }
-    pthread_mutex_unlock(&g_backend_cache_mutex);
+    pthread_rwlock_unlock(&g_backend_cache_rwlock);
     return 0;
 }
 
@@ -1743,7 +1740,7 @@ static void keystone_store_backend_cache(uint32_t cpu_features,
                                            double p95_ns_per_key,
                                            size_t calibration_runs,
                                            size_t candidates_measured) {
-    pthread_mutex_lock(&g_backend_cache_mutex);
+    pthread_rwlock_wrlock(&g_backend_cache_rwlock);
     size_t next = g_backend_cache_next;
     g_backend_cache_next = (next + 1) % KEYSTONE_AUTO_CACHE_ENTRIES;
     keystone_backend_cache_entry_t* entry =
@@ -1762,7 +1759,7 @@ static void keystone_store_backend_cache(uint32_t cpu_features,
     entry->calibration_runs = calibration_runs;
     entry->candidates_measured = candidates_measured;
     entry->valid = 1;  /* publish last, after all fields are written */
-    pthread_mutex_unlock(&g_backend_cache_mutex);
+    pthread_rwlock_unlock(&g_backend_cache_rwlock);
 }
 
 static void keystone_record_backend_decision(keystone_backend_t backend,

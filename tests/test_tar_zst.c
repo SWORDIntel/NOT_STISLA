@@ -464,6 +464,225 @@ static void test_load_all_members(void) {
     test_pass(name);
 }
 
+static void test_pipeline_mode(void) {
+    const char* name = "pipeline_mode";
+    if (!file_exists(ARCHIVE_PATH)) {
+        test_fail(name, "archive fixture not found");
+        return;
+    }
+
+    keystone_tar_zst_options_t opts = {
+        .format = KEYSTONE_TAR_ZST_FORMAT_AUTO,
+        .enable_pipeline = 1,
+        .chunk_size = 4096,
+        .arena_slab_size = 65536
+    };
+
+    keystone_tar_zst_t* tz = keystone_tar_zst_open(ARCHIVE_PATH, &opts);
+    if (!tz) {
+        test_fail(name, "failed to open archive in pipeline mode");
+        return;
+    }
+
+    keystone_config_t config;
+    keystone_config_init(&config, KEYSTONE_WORKLOAD_IDS);
+
+    keystone_result_t r = keystone_tar_zst_search_member(tz, "numbers.txt", 1000, NULL, &config);
+    if (r == KEYSTONE_NOT_FOUND) {
+        keystone_tar_zst_close(tz);
+        test_fail(name, "pipelined search failed to find 1000");
+        return;
+    }
+
+    keystone_tar_zst_stats_t stats;
+    keystone_tar_zst_get_stats(tz, &stats);
+    if (stats.members_read == 0 || stats.bytes_read == 0) {
+        keystone_tar_zst_close(tz);
+        test_fail(name, "pipelined stats show 0 members or bytes read");
+        return;
+    }
+
+    keystone_tar_zst_close(tz);
+    test_pass(name);
+}
+
+static void test_rewind_random_order(void) {
+    const char* name = "rewind_random_order";
+    if (!file_exists(ARCHIVE_PATH)) {
+        test_fail(name, "archive fixture not found");
+        return;
+    }
+
+    keystone_tar_zst_t* tz = keystone_tar_zst_open(ARCHIVE_PATH, NULL);
+    if (!tz) {
+        test_fail(name, "failed to open archive");
+        return;
+    }
+
+    keystone_config_t config;
+    keystone_config_init(&config, KEYSTONE_WORKLOAD_IDS);
+
+    /* Search the last member first */
+    keystone_result_t r1 = keystone_tar_zst_search_member(tz, "numbers.json", 2500, NULL, &config);
+    if (r1 == KEYSTONE_NOT_FOUND) {
+        keystone_tar_zst_close(tz);
+        test_fail(name, "failed to find key in numbers.json");
+        return;
+    }
+
+    /* Now search the first member (requires internal rewind) */
+    keystone_result_t r2 = keystone_tar_zst_search_member(tz, "numbers.txt", 1000, NULL, &config);
+    if (r2 == KEYSTONE_NOT_FOUND) {
+        keystone_tar_zst_close(tz);
+        test_fail(name, "rewind search failed for numbers.txt");
+        return;
+    }
+
+    keystone_tar_zst_close(tz);
+    test_pass(name);
+}
+
+static void test_sidecar_index_json(void) {
+    const char* name = "sidecar_index_json";
+    if (!file_exists(ARCHIVE_PATH)) {
+        test_fail(name, "archive fixture not found");
+        return;
+    }
+
+    const char* idx_path = FIXTURE_DIR "/test_data.tar.idx.json";
+    remove(idx_path);
+
+    /* 1. Build and save index to .idx.json */
+    keystone_tar_zst_t* tz = keystone_tar_zst_open(ARCHIVE_PATH, NULL);
+    if (!tz) {
+        test_fail(name, "failed to open archive for indexing");
+        return;
+    }
+
+    if (keystone_tar_zst_build_index(tz) != 0) {
+        keystone_tar_zst_close(tz);
+        test_fail(name, "build_index failed");
+        return;
+    }
+
+    if (keystone_tar_zst_save_index(tz, idx_path) != 0) {
+        keystone_tar_zst_close(tz);
+        test_fail(name, "save_index failed");
+        return;
+    }
+    keystone_tar_zst_close(tz);
+
+    if (!file_exists(idx_path)) {
+        test_fail(name, "idx.json file was not created");
+        return;
+    }
+
+    /* 2. Open archive and load index directly from JSON sidecar */
+    keystone_tar_zst_t* tz2 = keystone_tar_zst_open(ARCHIVE_PATH, NULL);
+    if (!tz2) {
+        test_fail(name, "failed to reopen archive");
+        return;
+    }
+
+    if (keystone_tar_zst_load_index(tz2, idx_path) != 0) {
+        keystone_tar_zst_close(tz2);
+        test_fail(name, "load_index from JSON failed");
+        return;
+    }
+
+    keystone_config_t config;
+    keystone_config_init(&config, KEYSTONE_WORKLOAD_IDS);
+
+    /* 3. Search positive match via loaded JSON index */
+    keystone_result_t r_pos = keystone_tar_zst_search_indexed(tz2, "numbers.txt", 1000, NULL, &config);
+    if (r_pos == KEYSTONE_NOT_FOUND) {
+        keystone_tar_zst_close(tz2);
+        test_fail(name, "indexed search on loaded JSON index failed for 1000");
+        return;
+    }
+
+    /* 4. Search negative match via loaded JSON index (Bloom rejection) */
+    keystone_result_t r_neg = keystone_tar_zst_search_indexed(tz2, "numbers.txt", 999999, NULL, &config);
+    if (r_neg != KEYSTONE_NOT_FOUND) {
+        keystone_tar_zst_close(tz2);
+        test_fail(name, "Bloom filter failed to reject 999999");
+        return;
+    }
+
+    keystone_tar_zst_close(tz2);
+    remove(idx_path);
+    test_pass(name);
+}
+
+static void test_batch_archives_pool(void) {
+    const char* name = "batch_archives_pool";
+    if (!file_exists(ARCHIVE_PATH)) {
+        test_fail(name, "archive fixture not found");
+        return;
+    }
+
+    const char* archives[] = { ARCHIVE_PATH, ARCHIVE_PATH };
+    keystone_tar_zst_batch_t* batch = keystone_tar_zst_batch_open(archives, 2, NULL);
+    if (!batch) {
+        test_fail(name, "failed to open batch pool");
+        return;
+    }
+
+    keystone_config_t config;
+    keystone_config_init(&config, KEYSTONE_WORKLOAD_IDS);
+
+    size_t match_archive = 999;
+    keystone_result_t res = keystone_tar_zst_batch_search(
+        batch, "numbers.csv", 1500, NULL, &config, &match_archive);
+
+    if (res == KEYSTONE_NOT_FOUND) {
+        keystone_tar_zst_batch_close(batch);
+        test_fail(name, "batch search failed to find key 1500");
+        return;
+    }
+
+    if (match_archive >= 2) {
+        keystone_tar_zst_batch_close(batch);
+        test_fail(name, "invalid matched archive index");
+        return;
+    }
+
+    keystone_tar_zst_batch_close(batch);
+    test_pass(name);
+}
+
+static void test_dsmil_load_from_tar_zst_populated(void) {
+    const char* name = "dsmil_load_from_tar_zst_populated";
+    if (!file_exists(ARCHIVE_PATH)) {
+        test_fail(name, "archive fixture not found");
+        return;
+    }
+
+    dsmil_telemetry_processor_t* proc = dsmil_telemetry_processor_create(2000);
+    if (!proc) {
+        test_fail(name, "failed to create processor");
+        return;
+    }
+
+    int rc = dsmil_telemetry_processor_load_from_tar_zst(proc, ARCHIVE_PATH, "numbers.txt");
+    if (rc != DSMIL_SEARCH_SUCCESS) {
+        dsmil_telemetry_processor_destroy(proc);
+        test_fail(name, "load_from_tar_zst failed");
+        return;
+    }
+
+    dsmil_telemetry_result_t result;
+    int s_rc = dsmil_telemetry_processor_find_by_timestamp(proc, 1000, &result);
+    if (s_rc != DSMIL_SEARCH_SUCCESS || !result.is_exact_match) {
+        dsmil_telemetry_processor_destroy(proc);
+        test_fail(name, "telemetry search in loaded processor failed to find key 1000");
+        return;
+    }
+
+    dsmil_telemetry_processor_destroy(proc);
+    test_pass(name);
+}
+
 int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
@@ -483,6 +702,11 @@ int main(int argc, char** argv) {
     test_corrupt_members();
     test_batch_search();
     test_load_all_members();
+    test_pipeline_mode();
+    test_rewind_random_order();
+    test_sidecar_index_json();
+    test_batch_archives_pool();
+    test_dsmil_load_from_tar_zst_populated();
 
     printf("\n----------------------------------------------\n");
     printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);

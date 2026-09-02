@@ -21,14 +21,14 @@ endif
 # Optional tar.zst streaming support (default: enabled if libarchive + libzstd are available)
 ifeq ($(KEYSTONE_ENABLE_TAR_ZST),1)
     TAR_ZST_CFLAGS := -DKEYSTONE_ENABLE_TAR_ZST
-    TAR_ZST_LDFLAGS := -larchive -lzstd
+    TAR_ZST_LDFLAGS := -larchive -lzstd -lpthread
     CFLAGS  += $(TAR_ZST_CFLAGS)
     LDFLAGS += $(TAR_ZST_LDFLAGS)
 else ifneq ($(KEYSTONE_ENABLE_TAR_ZST),0)
     ifeq ($(shell pkg-config --exists libarchive libzstd 2>/dev/null && echo yes),yes)
         KEYSTONE_ENABLE_TAR_ZST := 1
         TAR_ZST_CFLAGS := -DKEYSTONE_ENABLE_TAR_ZST
-        TAR_ZST_LDFLAGS := $(shell pkg-config --libs libarchive libzstd)
+        TAR_ZST_LDFLAGS := $(shell pkg-config --libs libarchive libzstd) -lpthread
         CFLAGS  += $(TAR_ZST_CFLAGS)
         LDFLAGS += $(TAR_ZST_LDFLAGS)
     endif

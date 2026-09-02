@@ -914,21 +914,7 @@ int dsmil_search_batch_tar_zst(
         int64_t *member_keys = NULL;
         size_t count = 0;
 
-        /* Navigate to member using public API */
-        int member_found = 0;
-        for (;;) {
-            char *name = NULL;
-            size_t name_len = 0;
-            int r = keystone_tar_zst_next_member(tz, &name, &name_len);
-            if (r <= 0) break;
-            if (name_len == strlen(member_names[m]) &&
-                memcmp(name, member_names[m], name_len) == 0) {
-                member_found = 1;
-                break;
-            }
-        }
-        if (!member_found) continue;
-
+        /* Extract member directly using rewind-capable API */
         if (keystone_tar_zst_extract_member(tz, member_names[m],
                                                 &member_keys, &count) != 0) {
             continue;

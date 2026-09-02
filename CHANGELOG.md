@@ -2,6 +2,17 @@
 
 All notable changes to the KEYSTONE search engine are documented in this file.
 
+## [1.3.0] - 2026-09-02
+
+### Performance & Concurrency Hardening
+- **Zero-Copy Pointer Ping-Pong Radix Sort** — Converted 8-pass LSD radix sort (`src/dsmil_hash_indexer.c`) to pointer ping-ponging across source and destination buffers. Completely eliminates 32 full-array `memcpy` operations, halving sort overhead on multimillion-record batches.
+- **Vector Engine Zero-Heap Query Fast Paths** — Added stack buffer scratchpads for cosine query normalization (up to 1,024 dimensions) and LSH candidate reranking (up to 512 candidates) in `vector_engine/keystone_engine.c`. Completely removes heap allocations during batch search queries.
+- **LSH SIMD Pipelining & Bloom Deduplication** — Unrolled `sign_dot` 4-way with parallel accumulator registers to saturate CPU FMA pipelines. Added 64-bit fast bloom filter in `vector_engine/lsh.c` candidate collection to reject duplicates in $O(1)$ time, skipping quadratic deduplication loops ~90% of the time. Upgraded bucket finalization from $O(N^2)$ bubble sort to $O(N \log N)$ `qsort`.
+- **Compiler-Agnostic OpenMP Vector Engine Build** — Upgraded `vector_engine/build_vector_engine.sh` to probe for OpenMP using compiler compilation checks rather than relying on compiler binary names, enabling multi-core vector search by default.
+- **Auto-Backend Reader-Writer Concurrency** — Upgraded `g_backend_cache_mutex` to `pthread_rwlock_t` (`g_backend_cache_rwlock`) in `src/keystone.c`. Multiple concurrent search workers query cached backend calibration decisions in parallel with zero lock contention.
+- **QIHSE Bridge Invariant 1 Security Alignment** — Automatically routes credential dispatch to authenticated write path (`keystone_qihse_bridge_dispatch_credential_authenticated`) whenever an ingestion principal is configured, preventing context-free write bypasses.
+- **Streaming Archive Multi-Archive Batch & Indexing** — Implemented rewind, sidecar indexing (`<archive>.idx.json`), pipelined decompression, and multi-archive pool APIs (`keystone_tar_zst_batch_*`) in `src/keystone_tar_zst.c`.
+
 ## [1.2.0] - 2026-08-28
 
 ### Security Fixes (P1/P2)

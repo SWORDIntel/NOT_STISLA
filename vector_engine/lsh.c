@@ -47,13 +47,36 @@ static float *generate_projection(uint32_t hash_bits, uint32_t dim) {
     return proj;
 }
 
-/* Compute one hash bit: sign of dot(vector, projection_row) */
+/* Compute one hash bit: sign of dot(vector, projection_row) with 4-way unrolling */
 static int sign_dot(const float *vec, const float *proj_row, uint32_t dim) {
-    float dot = 0.0f;
-    for (uint32_t i = 0; i < dim; i++) {
+    float dot0 = 0.0f, dot1 = 0.0f, dot2 = 0.0f, dot3 = 0.0f;
+    uint32_t i = 0;
+    uint32_t limit = dim & ~3u;
+    for (; i < limit; i += 4) {
+        dot0 += vec[i + 0] * proj_row[i + 0];
+        dot1 += vec[i + 1] * proj_row[i + 1];
+        dot2 += vec[i + 2] * proj_row[i + 2];
+        dot3 += vec[i + 3] * proj_row[i + 3];
+    }
+    float dot = (dot0 + dot1) + (dot2 + dot3);
+    for (; i < dim; i++) {
         dot += vec[i] * proj_row[i];
     }
     return (dot >= 0.0f) ? 1 : 0;
+}
+
+typedef struct {
+    int64_t key;
+    uint32_t offset;
+    uint32_t count;
+} lsh_bucket_entry_t;
+
+static int cmp_bucket_entries(const void* a, const void* b) {
+    const lsh_bucket_entry_t* ea = (const lsh_bucket_entry_t*)a;
+    const lsh_bucket_entry_t* eb = (const lsh_bucket_entry_t*)b;
+    if (ea->key < eb->key) return -1;
+    if (ea->key > eb->key) return 1;
+    return 0;
 }
 
 keystone_error_t keystone_lsh_create(keystone_lsh_index_t **idx,
@@ -235,39 +258,28 @@ keystone_error_t keystone_lsh_finalize(keystone_lsh_index_t *idx) {
 
     for (uint32_t t = 0; t < idx->num_tables; t++) {
         keystone_lsh_table_t *tbl = &idx->tables[t];
-        /* Sort bucket keys for binary/interpolation search */
-        /* We need to sort keys, offsets, and counts together.
-         * Create an index array, sort that, then reorder. */
         if (tbl->n_buckets <= 1) continue;
 
-        /* Simple approach: create arrays of (key, offset, count),
-         * sort by key, copy back. */
         uint32_t n = tbl->n_buckets;
-        int64_t *keys = (int64_t *)malloc(n * sizeof(int64_t));
-        uint32_t *offs = (uint32_t *)malloc(n * sizeof(uint32_t));
-        uint32_t *counts = (uint32_t *)malloc(n * sizeof(uint32_t));
-        if (!keys || !offs || !counts) {
-            free(keys); free(offs); free(counts);
+        lsh_bucket_entry_t *entries = (lsh_bucket_entry_t *)malloc(n * sizeof(lsh_bucket_entry_t));
+        if (!entries) {
             return KEYSTONE_ERR_OOM;
         }
-        memcpy(keys, tbl->bucket_keys, n * sizeof(int64_t));
-        memcpy(offs, tbl->bucket_offsets, n * sizeof(uint32_t));
-        memcpy(counts, tbl->bucket_counts, n * sizeof(uint32_t));
-
-        /* Bubble sort by key (n is typically small per table) */
         for (uint32_t i = 0; i < n; i++) {
-            for (uint32_t j = i + 1; j < n; j++) {
-                if (keys[j] < keys[i]) {
-                    int64_t tk = keys[i]; keys[i] = keys[j]; keys[j] = tk;
-                    uint32_t to = offs[i]; offs[i] = offs[j]; offs[j] = to;
-                    uint32_t tc = counts[i]; counts[i] = counts[j]; counts[j] = tc;
-                }
-            }
+            entries[i].key = tbl->bucket_keys[i];
+            entries[i].offset = tbl->bucket_offsets[i];
+            entries[i].count = tbl->bucket_counts[i];
         }
-        memcpy(tbl->bucket_keys, keys, n * sizeof(int64_t));
-        memcpy(tbl->bucket_offsets, offs, n * sizeof(uint32_t));
-        memcpy(tbl->bucket_counts, counts, n * sizeof(uint32_t));
-        free(keys); free(offs); free(counts);
+
+        /* O(N log N) quicksort on packed contiguous struct array */
+        qsort(entries, n, sizeof(lsh_bucket_entry_t), cmp_bucket_entries);
+
+        for (uint32_t i = 0; i < n; i++) {
+            tbl->bucket_keys[i] = entries[i].key;
+            tbl->bucket_offsets[i] = entries[i].offset;
+            tbl->bucket_counts[i] = entries[i].count;
+        }
+        free(entries);
     }
     return KEYSTONE_OK;
 }
@@ -306,6 +318,7 @@ keystone_error_t keystone_lsh_query(const keystone_lsh_index_t *idx,
 
     *out_count = 0;
     uint32_t collected = 0;
+    uint64_t seen_filter = 0;
 
     /* For each table, find the bucket and collect candidates */
     for (uint32_t t = 0; t < idx->num_tables; t++) {
@@ -326,14 +339,20 @@ keystone_error_t keystone_lsh_query(const keystone_lsh_index_t *idx,
             uint32_t offset = tbl->bucket_offsets[bucket];
             uint32_t count = tbl->bucket_counts[bucket];
             for (uint32_t i = 0; i < count && collected < max_candidates; i++) {
-                /* Dedup: check if we already have this index */
+                /* Dedup: 64-bit quick bloom filter check before linear search */
                 uint32_t vec_idx = tbl->indices[offset + i];
-                int found = 0;
-                for (uint32_t j = 0; j < collected; j++) {
-                    if (out_indices[j] == vec_idx) { found = 1; break; }
-                }
-                if (!found) {
+                uint64_t bit = (uint64_t)1 << (vec_idx & 63);
+                if (!(seen_filter & bit)) {
+                    seen_filter |= bit;
                     out_indices[collected++] = vec_idx;
+                } else {
+                    int found = 0;
+                    for (uint32_t j = 0; j < collected; j++) {
+                        if (out_indices[j] == vec_idx) { found = 1; break; }
+                    }
+                    if (!found) {
+                        out_indices[collected++] = vec_idx;
+                    }
                 }
             }
             if (collected >= max_candidates) break;

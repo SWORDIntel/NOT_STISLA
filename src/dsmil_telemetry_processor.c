@@ -412,30 +412,34 @@ int dsmil_telemetry_processor_load_from_tar_zst(
         return DSMIL_SEARCH_ERROR_INIT_FAILED;
     }
 
-    /* Iterate members to find the target; the streaming loader
-     * currently verifies the member exists but does not yet
-     * populate the processor's event arrays (requires an extract
-     * API or exposing parse_ctx). */
-    int found = 0;
-    for (;;) {
-        char *name = NULL;
-        size_t name_len = 0;
-        int r = keystone_tar_zst_next_member(tz, &name, &name_len);
-        if (r <= 0) break;
-        if (name_len == strlen(member_name) &&
-            memcmp(name, member_name, name_len) == 0) {
-            found = 1;
-            break;
+    int64_t *keys = NULL;
+    size_t count = 0;
+    if (keystone_tar_zst_extract_member(tz, member_name, &keys, &count) != 0) {
+        keystone_tar_zst_close(tz);
+        return DSMIL_SEARCH_ERROR_NOT_FOUND;
+    }
+
+    int result = DSMIL_SEARCH_SUCCESS;
+    if (keys && count > 0) {
+        for (size_t i = 0; i < count; i++) {
+            dsmil_telemetry_event_t event = {
+                .timestamp = (dsmil_timestamp_t)keys[i],
+                .event_type = 0,
+                .device_id = 0,
+                .layer_id = 0,
+                .event_data = NULL,
+                .data_size = 0
+            };
+            int rc = dsmil_telemetry_processor_add_event(processor, &event);
+            if (rc != DSMIL_SEARCH_SUCCESS) {
+                result = rc;
+                break;
+            }
         }
     }
 
     keystone_tar_zst_close(tz);
-
-    if (!found) {
-        return DSMIL_SEARCH_ERROR_NOT_FOUND;
-    }
-
-    return DSMIL_SEARCH_SUCCESS;
+    return result;
 }
 
 /* Simple glob matcher supporting * (any chars) and ? (one char) */

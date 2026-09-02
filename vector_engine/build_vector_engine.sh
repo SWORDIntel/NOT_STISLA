@@ -108,14 +108,15 @@ OBJS="$OBJS lsh.o keystone_engine.o persist.o"
 
 # ---- OpenMP (optional) ----
 OMP_LIBS=""
-if pkg-config --exists omp 2>/dev/null; then
-    OMP_LIBS="$(pkg-config --libs omp)"
-    OMP_FLAGS="$(pkg-config --cflags omp)"
-    echo "  OpenMP: enabled"
-elif [ "$CC" = "gcc" ] || [ "$CC" = "g++" ]; then
+OMP_FLAGS=""
+if try_compile_flag -fopenmp; then
     OMP_LIBS="-fopenmp"
     OMP_FLAGS="-fopenmp"
-    echo "  OpenMP: enabled (gcc)"
+    echo "  OpenMP: enabled (-fopenmp)"
+elif pkg-config --exists omp 2>/dev/null; then
+    OMP_LIBS="$(pkg-config --libs omp)"
+    OMP_FLAGS="$(pkg-config --cflags omp)"
+    echo "  OpenMP: enabled (pkg-config)"
 else
     echo "  OpenMP: not available — serial mode"
 fi

@@ -543,7 +543,10 @@ static keystone_error_t search_cpu(keystone_vec_engine_t *e,
         uint32_t max_cands = e->cfg.rerank_k > 0 ? e->cfg.rerank_k : 256;
         if (max_cands > e->count) max_cands = e->count;
 
-        uint32_t *cand_indices = (uint32_t *)malloc(max_cands * sizeof(uint32_t));
+        uint32_t stack_cands[512];
+        uint32_t *cand_indices = (max_cands <= 512)
+            ? stack_cands
+            : (uint32_t *)malloc(max_cands * sizeof(uint32_t));
         if (!cand_indices) return KEYSTONE_ERR_OOM;
 
         uint32_t n_cands = 0;
@@ -557,10 +560,10 @@ static keystone_error_t search_cpu(keystone_vec_engine_t *e,
                 float dist = e->kernels->dist1(query, &e->vectors[(size_t)idx * e->dim], e->dim);
                 topk_update(results, k, &count, e->ids[idx], dist);
             }
-            free(cand_indices);
+            if (cand_indices != stack_cands) free(cand_indices);
             return KEYSTONE_OK;
         }
-        free(cand_indices);
+        if (cand_indices != stack_cands) free(cand_indices);
         /* LSH found nothing — fall through to brute force */
     }
 
@@ -620,7 +623,10 @@ keystone_error_t keystone_vec_search(keystone_vec_engine_t *e,
 
     /* Normalize query if cosine */
     if (e->cfg.metric == KEYSTONE_METRIC_COSINE) {
-        float *qcopy = (float *)malloc(e->dim * sizeof(float));
+        float stack_qcopy[1024];
+        float *qcopy = (e->dim <= 1024)
+            ? stack_qcopy
+            : (float *)malloc(e->dim * sizeof(float));
         if (!qcopy) return KEYSTONE_ERR_OOM;
         memcpy(qcopy, query, e->dim * sizeof(float));
         if (e->kernels && e->kernels->normalize_batch) {
@@ -632,7 +638,7 @@ keystone_error_t keystone_vec_search(keystone_vec_engine_t *e,
         } else {
             rc = search_cpu(e, qcopy, k, results);
         }
-        free(qcopy);
+        if (qcopy != stack_qcopy) free(qcopy);
         return rc;
     }
 

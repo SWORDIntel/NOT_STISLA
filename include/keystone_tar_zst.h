@@ -39,6 +39,8 @@ typedef struct keystone_tar_zst_options {
     keystone_tar_zst_format_t format;
     int zstd_workers;       /* >1 enables multi-threaded zstd decompression */
     int enable_pipeline;    /* non-zero enables producer/consumer pipelining */
+    int auto_load_index;    /* non-zero auto-checks and loads <path>.idx.json if present */
+    int retain_keys;        /* non-zero keeps full sorted key copies in memory on index build */
     size_t chunk_size;      /* I/O chunk size (default 256 KiB) */
     size_t arena_slab_size; /* Arena slab size (default 1 MiB) */
     int skip_header;        /* For CSV: skip first line as header */
@@ -64,6 +66,14 @@ keystone_tar_zst_t* keystone_tar_zst_open(const char* path,
  * @brief Close archive and release all resources.
  */
 void keystone_tar_zst_close(keystone_tar_zst_t* tz);
+
+/**
+ * @brief Rewind the archive reader back to the beginning of the archive.
+ *
+ * @param tz Archive handle.
+ * @return 0 on success, <0 on error.
+ */
+int keystone_tar_zst_rewind(keystone_tar_zst_t* tz);
 
 /**
  * @brief Advance to the next archive member.
@@ -156,6 +166,74 @@ keystone_result_t keystone_tar_zst_search_indexed(
     int64_t key,
     keystone_anchor_table_t* table,
     const keystone_config_t* config
+);
+
+/**
+ * @brief Save the current index to a persistent sidecar index file (e.g. .idx.json).
+ *
+ * @param tz Archive handle with built index.
+ * @param path Destination path; if NULL, defaults to "<archive_path>.idx.json".
+ * @return 0 on success, <0 on error.
+ */
+int keystone_tar_zst_save_index(keystone_tar_zst_t* tz, const char* path);
+
+/**
+ * @brief Load an index from a persistent sidecar index file without scanning the archive.
+ *
+ * @param tz Archive handle.
+ * @param path Source path; if NULL, defaults to "<archive_path>.idx.json".
+ * @return 0 on success, <0 on error.
+ */
+int keystone_tar_zst_load_index(keystone_tar_zst_t* tz, const char* path);
+
+/* ============================================================================
+ * Multi-Archive Batch API
+ * ============================================================================ */
+
+typedef struct keystone_tar_zst_batch keystone_tar_zst_batch_t;
+
+/**
+ * @brief Open multiple .tar.zst archives as a unified batch pool.
+ *
+ * Archives in the pool can be queried in parallel. Companion .idx.json
+ * files are automatically discovered and loaded when present.
+ *
+ * @param archive_paths Array of archive file paths.
+ * @param num_archives Number of archives in the array.
+ * @param opts Options for each archive handle (may be NULL).
+ * @return Batch pool handle or NULL on error.
+ */
+keystone_tar_zst_batch_t* keystone_tar_zst_batch_open(
+    const char** archive_paths,
+    size_t num_archives,
+    const keystone_tar_zst_options_t* opts
+);
+
+/**
+ * @brief Close batch pool and release all underlying archive handles.
+ */
+void keystone_tar_zst_batch_close(keystone_tar_zst_batch_t* batch);
+
+/**
+ * @brief Search across all archives in the batch pool in parallel.
+ *
+ * Uses pre-loaded or built indices to reject non-matching archives in O(1) time.
+ *
+ * @param batch The batch pool handle.
+ * @param member_name Name of the target archive member.
+ * @param key Key to search for.
+ * @param table Anchor table (optional).
+ * @param config Search config (optional).
+ * @param out_archive_idx Optional pointer to receive index of the archive containing match.
+ * @return Search result index in the matching member, or KEYSTONE_NOT_FOUND.
+ */
+keystone_result_t keystone_tar_zst_batch_search(
+    keystone_tar_zst_batch_t* batch,
+    const char* member_name,
+    int64_t key,
+    keystone_anchor_table_t* table,
+    const keystone_config_t* config,
+    size_t* out_archive_idx
 );
 
 /* ============================================================================

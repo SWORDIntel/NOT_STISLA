@@ -40,6 +40,7 @@ typedef struct {
  * Initialize the bridge. Either kv_target or a complete non-empty cluster
  * target array must be supplied. Cluster configurations containing NULL node
  * targets are rejected rather than falling back to another node.
+ * Returns 0 on success and -1 on invalid configuration.
  */
 int keystone_qihse_bridge_init(const keystone_qihse_bridge_config_t* config);
 
@@ -49,6 +50,7 @@ int keystone_qihse_bridge_init(const keystone_qihse_bridge_config_t* config);
  * This function no longer performs a context-free write. It is an alias for
  * keystone_qihse_bridge_dispatch_credential_authenticated() and therefore
  * fails if no authenticated ingestion principal is configured.
+ * Returns 0 on success and -1 on failure.
  */
 int keystone_qihse_bridge_dispatch_credential(
     const char* email,
@@ -65,8 +67,10 @@ void keystone_qihse_bridge_set_principal(void* principal);
  * Dispatch a discovered credential to QIHSE with the configured authenticated
  * principal. The write is routed through qihse_kv_set_user().
  *
- * Returns 0/true-compatible success from QIHSE, or -1 for bridge validation,
- * routing, missing-principal, or formatting failures.
+ * The bridge preserves its public return-code convention rather than exposing
+ * QIHSE's boolean KV convention: returns 0 when QIHSE accepts the write and -1
+ * for authorization denial, storage failure, bridge validation, routing,
+ * missing-principal, or formatting failures.
  */
 int keystone_qihse_bridge_dispatch_credential_authenticated(
     const char* email,

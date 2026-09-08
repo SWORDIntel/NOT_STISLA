@@ -72,7 +72,9 @@ else ifneq ($(KEYSTONE_ENABLE_CUDA),0)
     endif
 endif
 
-# Optional QIHSE Unified Wire Protocol Bridge
+# Optional QIHSE Unified Wire Protocol Bridge. The bridge source is compiled in
+# unconditionally below: when KEYSTONE_ENABLE_QIHSE_BRIDGE is absent it builds
+# fail-closed stubs, and when enabled these flags link the real QIHSE backend.
 ifeq ($(KEYSTONE_ENABLE_QIHSE_BRIDGE),1)
     ifndef QIHSE_ROOT
         $(error KEYSTONE_ENABLE_QIHSE_BRIDGE=1 requires QIHSE_ROOT to be set (e.g. QIHSE_ROOT=/path/to/QIHSE))
@@ -81,10 +83,6 @@ ifeq ($(KEYSTONE_ENABLE_QIHSE_BRIDGE),1)
     QIHSE_LDFLAGS := -L"$(QIHSE_ROOT)" -lqihse -Wl,-rpath,"$(QIHSE_ROOT)"
     CFLAGS += $(QIHSE_CFLAGS)
     LDFLAGS += $(QIHSE_LDFLAGS)
-    SRC += src/qihse_keystone_bridge.c
-else
-    # Standalone stub compilation
-    SRC += src/qihse_keystone_bridge.c
 endif
 
 # CPU ISA feature flags
@@ -109,7 +107,8 @@ endif
 SRC     := src/keystone.c src/dsmil_keystone_wrapper.c src/dsmil_telemetry_processor.c \
            src/nst_prefetch_profile.c src/nst_platform_hints.c src/nst_memory_topology.c \
            src/nst_vector_config.c src/nst_batch_scheduler.c src/nst_cache_line_align.c \
-           src/nst_branch_predict.c src/nst_dram_locality.c src/keystone_avx512.c
+           src/nst_branch_predict.c src/nst_dram_locality.c src/keystone_avx512.c \
+           src/qihse_keystone_bridge.c
 OBJS    := $(SRC:.c=.o)
 
 TEST_SRC := tests/test_core_native.c tests/test_auto_backend.c \

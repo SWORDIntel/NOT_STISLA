@@ -148,8 +148,17 @@ jobs:
 
       - name: Build KEYSTONE with QIHSE bridge
         run: |
+          set -o pipefail
           make clean
-          make KEYSTONE_ENABLE_QIHSE_BRIDGE=1 KEYSTONE_ENABLE_FORTRAN=0 QIHSE_ROOT="$GITHUB_WORKSPACE/qihse" lib -j$(nproc)
+          make KEYSTONE_ENABLE_QIHSE_BRIDGE=1 KEYSTONE_ENABLE_FORTRAN=0 QIHSE_ROOT="$GITHUB_WORKSPACE/qihse" lib -j$(nproc) 2>&1 | tee keystone-qihse-bridge-build.log
+
+      - name: Upload bridge build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keystone-qihse-bridge-build-log
+          path: keystone-qihse-bridge-build.log
+          if-no-files-found: error
 
       - name: Build bridge authorization regression
         run: |

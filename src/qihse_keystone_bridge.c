@@ -157,7 +157,7 @@ int keystone_qihse_bridge_dispatch_credential_authenticated(
         return -1;
     }
 
-    int rc = qihse_kv_set_user(
+    bool stored = qihse_kv_set_user(
         kv,
         email,
         enriched_value,
@@ -166,7 +166,11 @@ int keystone_qihse_bridge_dispatch_credential_authenticated(
         principal);
 
     secure_zero(enriched_value, sizeof(enriched_value));
-    return rc;
+
+    /* Preserve the public bridge ABI: zero is success, negative is failure.
+     * QIHSE's KV API is boolean, so never leak its 1/0 convention through the
+     * bridge boundary. */
+    return stored ? 0 : -1;
 }
 
 #else

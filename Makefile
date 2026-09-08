@@ -108,7 +108,7 @@ SRC     := src/keystone.c src/dsmil_keystone_wrapper.c src/dsmil_telemetry_proce
            src/nst_prefetch_profile.c src/nst_platform_hints.c src/nst_memory_topology.c \
            src/nst_vector_config.c src/nst_batch_scheduler.c src/nst_cache_line_align.c \
            src/nst_branch_predict.c src/nst_dram_locality.c src/keystone_avx512.c \
-           src/qihse_keystone_bridge.c
+           src/keystone_avx512_search.c src/qihse_keystone_bridge.c
 OBJS    := $(SRC:.c=.o)
 
 TEST_SRC := tests/test_core_native.c tests/test_auto_backend.c \
@@ -160,8 +160,11 @@ bin:
 	mkdir -p bin
 
 # Pattern rules
-# Explicit rule for AVX-512 object to isolate experimental code
+# Explicit rule for AVX-512 objects to isolate experimental code
 src/keystone_avx512.o: src/keystone_avx512.c
+	$(if $(filter 1,$(KEYSTONE_ENABLE_AVX512)),$(CC) $(CFLAGS) -mavx512f -mavx512dq -c $< -o $@,$(CC) $(CFLAGS) -mno-avx512f -c $< -o $@)
+
+src/keystone_avx512_search.o: src/keystone_avx512_search.c
 	$(if $(filter 1,$(KEYSTONE_ENABLE_AVX512)),$(CC) $(CFLAGS) -mavx512f -mavx512dq -c $< -o $@,$(CC) $(CFLAGS) -mno-avx512f -c $< -o $@)
 
 %.o: %.c

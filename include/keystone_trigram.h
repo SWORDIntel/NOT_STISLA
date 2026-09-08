@@ -10,6 +10,14 @@
 #ifndef KEYSTONE_TRIGRAM_H
 #define KEYSTONE_TRIGRAM_H
 
+/* keystone_trigram.c includes this header before any system headers. Defining
+ * the POSIX feature level here keeps clock_gettime/CLOCK_MONOTONIC visible in
+ * strict -std=c11 builds as well as GNU dialect builds. Do not overwrite a
+ * feature level already selected by the embedding application. */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>

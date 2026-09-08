@@ -50,8 +50,10 @@ jobs:
           STATUS6=${PIPESTATUS[0]}
           ./bin/test_tar_zst 2>&1 | tee .github/ci-artifacts/test_tar_zst.log
           STATUS7=${PIPESTATUS[0]}
+          ./bin/test_trigram_index 2>&1 | tee .github/ci-artifacts/test_trigram_index.log
+          STATUS8=${PIPESTATUS[0]}
           TEST_STATUS=0
-          if [ "$STATUS1" -ne 0 ] || [ "$STATUS2" -ne 0 ] || [ "$STATUS3" -ne 0 ] || [ "$STATUS4" -ne 0 ] || [ "$STATUS5" -ne 0 ] || [ "$STATUS6" -ne 0 ] || [ "$STATUS7" -ne 0 ]; then
+          if [ "$STATUS1" -ne 0 ] || [ "$STATUS2" -ne 0 ] || [ "$STATUS3" -ne 0 ] || [ "$STATUS4" -ne 0 ] || [ "$STATUS5" -ne 0 ] || [ "$STATUS6" -ne 0 ] || [ "$STATUS7" -ne 0 ] || [ "$STATUS8" -ne 0 ]; then
             TEST_STATUS=1
           fi
           END_TS=$(date -u +%s)
@@ -71,6 +73,7 @@ jobs:
             echo "test_performance_fix_status: $STATUS5"
             echo "test_telemetry_processor_perf_status: $STATUS6"
             echo "test_tar_zst_status: $STATUS7"
+            echo "test_trigram_index_status: $STATUS8"
             echo "ref: ${{ github.ref }}"
             echo "sha: ${{ github.sha }}"
           } > .github/ci-artifacts/ci-summary.md
@@ -92,3 +95,26 @@ jobs:
         if: always()
         run: |
           echo "::notice file=.github/ci-artifacts/ci-summary.md,title=KEYSTONE CI Summary::See attached artifact 'stisorter-ci-artifacts'"
+
+  trigram-sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install compiler
+        run: sudo apt-get update && sudo apt-get install -y build-essential clang
+
+      - name: Build trigram regression with ASan and UBSan
+        run: |
+          make clean
+          make CC=clang KEYSTONE_ENABLE_FORTRAN=0 KEYSTONE_ENABLE_TAR_ZST=0 KEYSTONE_FORCE_SCALAR=1 \
+            CFLAGS="-O1 -g -fPIC -Wall -Wextra -Werror=implicit-function-declaration -I./include -DKEYSTONE_ENABLE_PLATFORM_TUNING -fsanitize=address,undefined -fno-omit-frame-pointer" \
+            LDFLAGS="-lm -fsanitize=address,undefined" \
+            bin/test_trigram_index
+
+      - name: Run trigram sanitizer regression
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ./bin/test_trigram_index

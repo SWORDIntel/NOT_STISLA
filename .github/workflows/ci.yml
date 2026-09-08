@@ -103,15 +103,15 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install compiler
-        run: sudo apt-get update && sudo apt-get install -y build-essential clang
+        run: sudo apt-get update && sudo apt-get install -y clang
 
       - name: Build trigram regression with ASan and UBSan
         run: |
-          make clean
-          make CC=clang KEYSTONE_ENABLE_FORTRAN=0 KEYSTONE_ENABLE_TAR_ZST=0 KEYSTONE_FORCE_SCALAR=1 \
-            CFLAGS="-O1 -g -fPIC -Wall -Wextra -Werror=implicit-function-declaration -I./include -DKEYSTONE_ENABLE_PLATFORM_TUNING -fsanitize=address,undefined -fno-omit-frame-pointer" \
-            LDFLAGS="-lm -fsanitize=address,undefined" \
-            bin/test_trigram_index
+          mkdir -p bin
+          clang -std=c11 -O1 -g -Wall -Wextra -Werror=implicit-function-declaration \
+            -I./include -fsanitize=address,undefined -fno-omit-frame-pointer \
+            src/keystone_trigram.c tests/test_trigram_index.c \
+            -o bin/test_trigram_index -fsanitize=address,undefined
 
       - name: Run trigram sanitizer regression
         env:

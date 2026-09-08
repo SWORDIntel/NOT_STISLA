@@ -114,10 +114,11 @@ OBJS    := $(SRC:.c=.o)
 
 TEST_SRC := tests/test_core_native.c tests/test_auto_backend.c \
             tests/test_fortran_backend.c tests/test_telemetry_processor_perf.c \
-            tests/dsmil_integration_test.c tests/test_performance_fix.c
+            tests/dsmil_integration_test.c tests/test_performance_fix.c \
+            tests/test_trigram_index.c
 TEST_BIN := bin/test_enhanced bin/test_auto_backend bin/test_fortran_backend \
             bin/test_telemetry_processor_perf bin/test_performance_fix \
-            bin/test_core_native
+            bin/test_core_native bin/test_trigram_index
 
 ifeq ($(KEYSTONE_ENABLE_TAR_ZST),1)
 SRC     += src/keystone_tar_zst.c
@@ -125,12 +126,12 @@ TEST_SRC += tests/test_tar_zst.c
 TEST_BIN += bin/test_tar_zst
 endif
 
-SRC     += src/dsmil_hash_indexer.c src/dsmil_dirty_parser.c src/dsmil_model_bridge.c src/dsmil_micro_model.c
+SRC     += src/dsmil_hash_indexer.c src/dsmil_dirty_parser.c src/dsmil_model_bridge.c src/dsmil_micro_model.c src/keystone_trigram.c
 
 OBJS    := $(SRC:.c=.o)
 
-BENCH_SRC := benchmarks/dsmil_benchmark.c benchmarks/performance_proof.c
-BENCH_BIN := benchmarks/dsmil_benchmark benchmarks/performance_proof
+BENCH_SRC := benchmarks/dsmil_benchmark.c benchmarks/performance_proof.c benchmarks/trigram_benchmark.c
+BENCH_BIN := benchmarks/dsmil_benchmark benchmarks/performance_proof benchmarks/trigram_benchmark
 
 .PHONY: all lib tests test check run-tests benchmarks clean
 
@@ -195,6 +196,9 @@ bin/test_telemetry_processor_perf: $(OBJS) tests/test_telemetry_processor_perf.o
 bin/test_performance_fix: $(OBJS) tests/test_performance_fix.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
+bin/test_trigram_index: $(OBJS) tests/test_trigram_index.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
 bin/test_tar_zst: $(OBJS) tests/test_tar_zst.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
@@ -203,6 +207,9 @@ benchmarks/dsmil_benchmark: $(OBJS) benchmarks/dsmil_benchmark.o benchmarks/benc
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 benchmarks/performance_proof: $(OBJS) benchmarks/performance_proof.o benchmarks/benchmark_writer.o
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+benchmarks/trigram_benchmark: $(OBJS) benchmarks/trigram_benchmark.o
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 # Fortran backend (optional)

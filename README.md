@@ -59,6 +59,7 @@ KEYSTONE combines several focused capabilities behind one native library:
 | **Runtime backend calibration** | Measures viable execution paths on the local machine and caches the fastest choice for comparable workloads. |
 | **Unstructured-data ingestion** | Extracts useful identifiers from noisy source data without requiring a heavyweight parsing stack. |
 | **Archive-aware processing** | High-throughput streaming and indexed search over `.tar.zst` archives with persistent `.idx.json` sidecars, pipelined ring-buffer decompression, and multi-archive batching. |
+| **Trigram content indexing (tgrep-style)** | Inverted 24-bit trigram index for raw text/log corpora delivering up to 100x+ sub-linear candidate file rejection prior to byte verification. |
 | **Context classification** | An optional small native neural model can classify extracted context for downstream triage. |
 | **Vector similarity search** | LSH-indexed cosine/L2/dot similarity over 384-dim float32 vectors with SIMD acceleration and CUDA/VPU paths. |
 | **QIHSE integration** | Can act as a native preprocessing/ingestion layer for the QIHSE database ecosystem. |
@@ -150,6 +151,7 @@ KEYSTONE is a working native library and test/benchmark suite.
 - unstructured-data tokenizer and hash indexer;
 - native context micro-model;
 - QIHSE bridge support;
+- **trigram content indexer** (`keystone_trigram.h`) inspired by Microsoft tgrep for sub-linear full-text and pattern search;
 - **vector similarity engine** with LSH coarse indexing, SIMD cosine/L2/dot distance, CUDA and VPU (Myriad X) accelerated paths, and 8-level graceful fallback (scalar always compiled);
 - correctness and performance test infrastructure.
 

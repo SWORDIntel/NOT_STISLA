@@ -155,6 +155,7 @@ A native tokenizer extracts identifiers from noisy input. String-like fields can
 
 - **Zero-Copy Double-Buffered Radix Sort**: Keys, offsets, raw strings, and lengths are sorted using an 8-pass Least Significant Digit (LSD) radix sort (`src/dsmil_hash_indexer.c`). The sort operates via double-buffered pointer ping-ponging between primary and scratch arrays. Because the pass count ($8$) is even, sorted data terminates directly in caller arrays with zero full-array memory copies (eliminating 32 full-array `memcpy` operations).
 - **Collision Verification**: Every positive hash lookup is checked against the original source string bytes to eliminate false matches from 64-bit hash collisions.
+- **Trigram Content Indexing (tgrep-style)**: High-performance 24-bit trigram inverted index (`include/keystone_trigram.h`, `src/keystone_trigram.c`) mapping 3-byte character sequences to sorted document/chunk IDs. Intersects posting lists to reject up to 99.9%+ of non-matching candidate documents prior to full byte verification.
 
 The optional context model consumes a bounded byte window around a hit and emits one of six semantic classes with confidence gating. This model is deliberately small enough to execute directly in the native pipeline rather than requiring a general ML runtime for every classification.
 

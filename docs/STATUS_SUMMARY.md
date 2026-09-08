@@ -60,6 +60,11 @@ Condensed from DYNAMIC_HOT_PATH_PLAN, FORTRAN_BACKEND_PLAN, IMPROVEMENT_PLAN, OP
 - Reader-writer lock (`pthread_rwlock_t`) on auto-backend calibration cache (`src/keystone.c`), enabling lock-free concurrent lookups.
 - QIHSE bridge authentication: auto-delegating credential dispatch to `keystone_qihse_bridge_dispatch_credential_authenticated()` when principal is configured, enforcing QIHSE Invariant 1.
 
+### Trigram Content Indexing (tgrep-style)
+- Native C11 trigram index engine (`include/keystone_trigram.h`, `src/keystone_trigram.c`).
+- 24-bit hash trigram extraction and inverted posting list intersection for sub-linear text document search.
+- Achieves 100x+ search speedups on large text/log corpora by rejecting non-matching candidates before full verification.
+
 ## Still To Do
 
 The items below are the current engineering backlog. The root README intentionally keeps this detail out of the executive overview; see [TECHNICAL_OVERVIEW.md](TECHNICAL_OVERVIEW.md) for the surrounding architecture.

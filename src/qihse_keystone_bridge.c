@@ -37,7 +37,7 @@ uint32_t keystone_qihse_bridge_slot_to_node(uint32_t slot, uint32_t num_nodes) {
 }
 
 #ifdef KEYSTONE_ENABLE_QIHSE_BRIDGE
-#include <qihse.h>
+#include <qihse_kv_store.h>
 
 static keystone_qihse_bridge_config_t g_bridge_cfg = {0};
 static int g_bridge_active = 0;

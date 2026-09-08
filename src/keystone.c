@@ -28,6 +28,7 @@
 #include <setjmp.h>
 #include <stdint.h>
 #include <errno.h>
+#include <stdatomic.h>
 #if defined(__x86_64__) || defined(__i386__)
 #include <cpuid.h>
 #endif
@@ -217,7 +218,7 @@ static int test_vnni(void) {
 
 /* Runtime CPU feature detection (KEYSTONE-native) */
 uint32_t keystone_detect_cpu_features(void) {
-    if (__atomic_load_n(&cpu_features_detected, __ATOMIC_ACQUIRE) == 0) {
+    if (atomic_load_explicit(&cpu_features_detected, memory_order_acquire) == 0) {
         uint32_t features = 0;
 
 #if defined(__aarch64__)
@@ -274,7 +275,7 @@ uint32_t keystone_detect_cpu_features(void) {
 #endif
 
         detected_cpu_features = features;
-        __atomic_store_n(&cpu_features_detected, 1, __ATOMIC_RELEASE);
+        atomic_store_explicit(&cpu_features_detected, 1, memory_order_release);
     }
 
     return detected_cpu_features;
@@ -319,7 +320,7 @@ static inline uint64_t keystone_next_anchor_timestamp(void) {
 }
 
 static int keystone_claim_stats_slot(void) {
-    int slot = __atomic_fetch_add(&g_stats_next_slot, 1, __ATOMIC_RELAXED);
+    int slot = atomic_fetch_add_explicit(&g_stats_next_slot, 1, memory_order_relaxed);
     if (slot >= KEYSTONE_STATS_MAX_THREADS) {
         return KEYSTONE_STATS_MAX_THREADS - 1;
     }
@@ -346,10 +347,10 @@ static void keystone_update_performance_stats(
         return;
     }
 
-    int buf = __atomic_load_n(&g_stats_active_idx, __ATOMIC_ACQUIRE);
+    int buf = atomic_load_explicit(&g_stats_active_idx, memory_order_acquire);
     if (buf < 0 || buf > 1) buf = 0;
 
-    __atomic_fetch_add(&g_stats_writers[buf], 1, __ATOMIC_RELAXED);
+    atomic_fetch_add_explicit(&g_stats_writers[buf], 1, memory_order_relaxed);
 
     keystone_per_thread_stats_t *s = &g_stats_buffers[buf][slot];
     s->total_time_ns += search_time_ns;
@@ -364,23 +365,23 @@ static void keystone_update_performance_stats(
     }
     s->cpu_features_used |= cpu_features_used;
 
-    __atomic_fetch_sub(&g_stats_writers[buf], 1, __ATOMIC_RELAXED);
+    atomic_fetch_sub_explicit(&g_stats_writers[buf], 1, memory_order_relaxed);
 
     /* Global atomic fields (set-once, last-writer-wins is acceptable) */
-    __atomic_store_n(&g_stats_anchors_learned, anchors_learned, __ATOMIC_RELAXED);
-    __atomic_store_n(&g_stats_anchors_pruned, anchors_pruned, __ATOMIC_RELAXED);
+    atomic_store_explicit(&g_stats_anchors_learned, anchors_learned, memory_order_relaxed);
+    atomic_store_explicit(&g_stats_anchors_pruned, anchors_pruned, memory_order_relaxed);
 }
 
 int keystone_get_performance_stats(keystone_performance_stats_t* stats) {
     if (!stats) return -1;
 
     /* Swap to the other buffer so workers drain into the new one */
-    int old_buf = __atomic_load_n(&g_stats_active_idx, __ATOMIC_ACQUIRE);
+    int old_buf = atomic_load_explicit(&g_stats_active_idx, memory_order_acquire);
     int new_buf = old_buf ^ 1;
-    __atomic_store_n(&g_stats_active_idx, new_buf, __ATOMIC_RELEASE);
+    atomic_store_explicit(&g_stats_active_idx, new_buf, memory_order_release);
 
     /* RCU quiescence: wait until all writers have left the old buffer */
-    while (__atomic_load_n(&g_stats_writers[old_buf], __ATOMIC_ACQUIRE) != 0) {
+    while (atomic_load_explicit(&g_stats_writers[old_buf], memory_order_acquire) != 0) {
         /* Spin. Writers drain quickly on the uncontended local-memory path. */
     }
 
@@ -423,8 +424,8 @@ int keystone_get_performance_stats(keystone_performance_stats_t* stats) {
     }
 
     stats->peak_memory_usage = (size_t)peak_memory_usage;
-    stats->anchors_learned = __atomic_load_n(&g_stats_anchors_learned, __ATOMIC_RELAXED);
-    stats->anchors_pruned = __atomic_load_n(&g_stats_anchors_pruned, __ATOMIC_RELAXED);
+    stats->anchors_learned = atomic_load_explicit(&g_stats_anchors_learned, memory_order_relaxed);
+    stats->anchors_pruned = atomic_load_explicit(&g_stats_anchors_pruned, memory_order_relaxed);
     stats->cpu_features_used = cpu_features_used;
 
     int vector_features = 0;
@@ -446,12 +447,12 @@ int keystone_get_performance_stats(keystone_performance_stats_t* stats) {
 void keystone_reset_performance_stats(void) {
     memset(g_stats_buffers[0], 0, sizeof(g_stats_buffers[0]));
     memset(g_stats_buffers[1], 0, sizeof(g_stats_buffers[1]));
-    __atomic_store_n(&g_stats_next_slot, 0, __ATOMIC_RELAXED);
-    __atomic_store_n(&g_stats_active_idx, 0, __ATOMIC_RELAXED);
-    __atomic_store_n(&g_stats_writers[0], 0, __ATOMIC_RELAXED);
-    __atomic_store_n(&g_stats_writers[1], 0, __ATOMIC_RELAXED);
-    __atomic_store_n(&g_stats_anchors_learned, 0, __ATOMIC_RELAXED);
-    __atomic_store_n(&g_stats_anchors_pruned, 0, __ATOMIC_RELAXED);
+    atomic_store_explicit(&g_stats_next_slot, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_stats_active_idx, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_stats_writers[0], 0, memory_order_relaxed);
+    atomic_store_explicit(&g_stats_writers[1], 0, memory_order_relaxed);
+    atomic_store_explicit(&g_stats_anchors_learned, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_stats_anchors_pruned, 0, memory_order_relaxed);
 }
 
 void keystone_set_performance_tracking(int enabled) {
@@ -1785,7 +1786,7 @@ static void keystone_record_backend_decision(keystone_backend_t backend,
     g_last_backend_decision.calibration_runs = calibration_runs;
     g_last_backend_decision.candidates_measured = candidates_measured;
     pthread_mutex_unlock(&g_last_decision_mutex);
-    __atomic_store_n(&g_last_backend_decision_valid, 1, __ATOMIC_RELEASE);
+    atomic_store_explicit(&g_last_backend_decision_valid, 1, memory_order_release);
 }
 
 static keystone_backend_t keystone_static_auto_backend(size_t n,
@@ -2209,7 +2210,7 @@ size_t keystone_search_keys_batch_auto(
 }
 
 int keystone_get_last_backend_decision(keystone_backend_decision_t* decision) {
-    if (!decision || !__atomic_load_n(&g_last_backend_decision_valid, __ATOMIC_ACQUIRE)) {
+    if (!decision || !atomic_load_explicit(&g_last_backend_decision_valid, memory_order_acquire)) {
         return -1;
     }
 

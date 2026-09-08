@@ -52,6 +52,12 @@ static bool checked_add_size(size_t a, size_t b, size_t* out) {
     return true;
 }
 
+static size_t max_document_count(void) {
+    size_t max_docs = (size_t)UINT32_MAX;
+    if (sizeof(size_t) > sizeof(uint32_t)) max_docs += 1u;
+    return max_docs;
+}
+
 static void secure_zero(void* ptr, size_t len) {
     volatile unsigned char* p = (volatile unsigned char*)ptr;
     while (ptr && len-- > 0u) {
@@ -99,7 +105,7 @@ static inline size_t hash_trigram_key(uint32_t key, size_t num_buckets) {
     h *= 16777619u;
     h ^= ((key >> 16) & 0xFFu);
     h *= 16777619u;
-    return (size_t)(h & (uint32_t)(num_buckets - 1u));
+    return (size_t)h & (num_buckets - 1u);
 }
 
 static inline uint64_t get_time_ns(void) {
@@ -147,7 +153,7 @@ static int resize_trigram_hash_table(keystone_trigram_index_t* idx) {
 
 keystone_trigram_index_t* keystone_trigram_index_create(size_t initial_doc_capacity) {
     if (initial_doc_capacity == 0u) initial_doc_capacity = 64u;
-    if (initial_doc_capacity > (size_t)UINT32_MAX + 1u) return NULL;
+    if (initial_doc_capacity > max_document_count()) return NULL;
 
     size_t ignored;
     if (!checked_mul_size(initial_doc_capacity, sizeof(keystone_trigram_doc_t), &ignored)) {
@@ -334,7 +340,7 @@ static int ensure_doc_capacity(keystone_trigram_index_t* idx) {
         return poison_index(idx, KEYSTONE_TRIGRAM_EOVERFLOW);
     }
     size_t new_cap = idx->doc_capacity * 2u;
-    size_t max_docs = (size_t)UINT32_MAX + 1u;
+    size_t max_docs = max_document_count();
     if (new_cap > max_docs) new_cap = max_docs;
     if (new_cap <= idx->doc_capacity) {
         return poison_index(idx, KEYSTONE_TRIGRAM_EOVERFLOW);

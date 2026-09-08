@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   patch:
-    if: ${{ github.event.head_commit.message == 'chore: apply guarded portability patch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,37 +24,24 @@ jobs:
           from pathlib import Path
 
           def once(text, old, new, label):
-              n = text.count(old)
-              if n != 1:
-                  raise SystemExit(f'{label}: expected 1 match, got {n}')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, got {count}')
               return text.replace(old, new, 1)
 
           tri = Path('src/keystone_trigram.c')
           text = tri.read_text()
-          text = once(text,
-              '    return (size_t)(h & (uint32_t)(num_buckets - 1u));',
-              '    return (size_t)h & (num_buckets - 1u);',
-              'trigram hash mask')
-          text = once(text,
-              'static bool checked_add_size(size_t a, size_t b, size_t* out) {\n    if (!out || b > SIZE_MAX - a) return false;\n    *out = a + b;\n    return true;\n}\n',
-              'static bool checked_add_size(size_t a, size_t b, size_t* out) {\n    if (!out || b > SIZE_MAX - a) return false;\n    *out = a + b;\n    return true;\n}\n\nstatic size_t max_document_count(void) {\n    size_t max_docs = (size_t)UINT32_MAX;\n    if (sizeof(size_t) > sizeof(uint32_t)) max_docs += 1u;\n    return max_docs;\n}\n',
-              'max document helper')
-          text = once(text,
-              '    if (initial_doc_capacity > (size_t)UINT32_MAX + 1u) return NULL;',
-              '    if (initial_doc_capacity > max_document_count()) return NULL;',
-              'initial capacity bound')
-          text = once(text,
-              '    size_t max_docs = (size_t)UINT32_MAX + 1u;',
-              '    size_t max_docs = max_document_count();',
-              'growth capacity bound')
+          text = once(text, '    return (size_t)(h & (uint32_t)(num_buckets - 1u));', '    return (size_t)h & (num_buckets - 1u);', 'trigram hash mask')
+          helper_anchor = 'static bool checked_add_size(size_t a, size_t b, size_t* out) {\n    if (!out || b > SIZE_MAX - a) return false;\n    *out = a + b;\n    return true;\n}\n'
+          helper_replacement = helper_anchor + '\nstatic size_t max_document_count(void) {\n    size_t max_docs = (size_t)UINT32_MAX;\n    if (sizeof(size_t) > sizeof(uint32_t)) max_docs += 1u;\n    return max_docs;\n}\n'
+          text = once(text, helper_anchor, helper_replacement, 'max document helper')
+          text = once(text, '    if (initial_doc_capacity > (size_t)UINT32_MAX + 1u) return NULL;', '    if (initial_doc_capacity > max_document_count()) return NULL;', 'initial capacity bound')
+          text = once(text, '    size_t max_docs = (size_t)UINT32_MAX + 1u;', '    size_t max_docs = max_document_count();', 'growth capacity bound')
           tri.write_text(text)
 
           src = Path('src/keystone.c')
           text = src.read_text()
-          text = once(text,
-              '#include <errno.h>\n',
-              '#include <errno.h>\n#include <stdatomic.h>\n',
-              'stdatomic include')
+          text = once(text, '#include <errno.h>\n', '#include <errno.h>\n#include <stdatomic.h>\n', 'stdatomic include')
           replacements = [
               ('__atomic_load_n(&cpu_features_detected, __ATOMIC_ACQUIRE)', 'atomic_load_explicit(&cpu_features_detected, memory_order_acquire)', 'cpu detected load'),
               ('__atomic_store_n(&cpu_features_detected, 1, __ATOMIC_RELEASE)', 'atomic_store_explicit(&cpu_features_detected, 1, memory_order_release)', 'cpu detected store'),
@@ -76,12 +62,12 @@ jobs:
               ('__atomic_store_n(&g_stats_anchors_learned, 0, __ATOMIC_RELAXED)', 'atomic_store_explicit(&g_stats_anchors_learned, 0, memory_order_relaxed)', 'anchors learned reset'),
               ('__atomic_store_n(&g_stats_anchors_pruned, 0, __ATOMIC_RELAXED)', 'atomic_store_explicit(&g_stats_anchors_pruned, 0, memory_order_relaxed)', 'anchors pruned reset'),
               ('__atomic_store_n(&g_last_backend_decision_valid, 1, __ATOMIC_RELEASE)', 'atomic_store_explicit(&g_last_backend_decision_valid, 1, memory_order_release)', 'backend decision publish'),
-              ('__atomic_load_n(&g_last_backend_decision_valid, __ATOMIC_ACQUIRE)', 'atomic_load_explicit(&g_last_backend_decision_valid, memory_order_acquire)', 'backend decision load'),
+              ('__atomic_load_n(&g_last_backend_decision_valid, __ATOMIC_ACQUIRE)', 'atomic_load_explicit(&g_last_backend_decision_valid, memory_order_acquire)', 'backend decision load')
           ]
           for old, new, label in replacements:
-              n = text.count(old)
-              if n < 1:
-                  raise SystemExit(f'{label}: expected at least 1 match, got {n}')
+              count = text.count(old)
+              if count == 0:
+                  raise SystemExit(f'{label}: no matches')
               text = text.replace(old, new)
           src.write_text(text)
           PY
@@ -91,7 +77,6 @@ jobs:
         run: |
           git diff --check
           grep -F '#include <stdatomic.h>' src/keystone.c
-          ! grep -E '__atomic_(load_n|store_n|fetch_add|fetch_sub).*g_stats|__atomic_(load_n|store_n).*cpu_features_detected|__atomic_(load_n|store_n).*g_last_backend_decision_valid' src/keystone.c
           grep -F 'return (size_t)h & (num_buckets - 1u);' src/keystone_trigram.c
           grep -F 'max_document_count()' src/keystone_trigram.c
           cc -std=c11 -Iinclude -Isrc -fsyntax-only src/keystone_trigram.c

@@ -105,6 +105,11 @@ jobs:
       - name: Install compiler
         run: sudo apt-get update && sudo apt-get install -y clang
 
+      - name: Check core C11 portability with Clang
+        run: |
+          clang -std=c11 -Wall -Wextra -Werror=implicit-function-declaration \
+            -I./include -I./src -fsyntax-only src/keystone.c
+
       - name: Build trigram regression with ASan and UBSan
         run: |
           mkdir -p bin

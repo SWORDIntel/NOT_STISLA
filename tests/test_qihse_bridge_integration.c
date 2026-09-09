@@ -8,6 +8,7 @@
 #include "qihse_kv_store.h"
 
 #define BRIDGE_GUEST_ID 62001u
+#define BRIDGE_OPERATOR_PASSWORD "KeystoneBridgeOperatorPass1!"
 #define BRIDGE_GUEST_PASSWORD "KeystoneBridgeGuestPass1!"
 
 static void assert_missing(qihse_kv_store_t* store,
@@ -18,8 +19,15 @@ static void assert_missing(qihse_kv_store_t* store,
 }
 
 int main(void) {
+    /* QIHSE principals are authoritative registry objects, not caller-created
+     * structs. Initialize the registry first and make the system operator
+     * usable before creating the low-clearance negative-test principal. */
+    assert(qihse_auth_init());
     qihse_user_t* operator_user = qihse_auth_get_user(0);
     assert(operator_user != NULL);
+    if (qihse_auth_is_operator_password_default()) {
+        assert(qihse_auth_bootstrap_operator(BRIDGE_OPERATOR_PASSWORD));
+    }
 
     qihse_kv_store_t* store = qihse_kv_store_create();
     assert(store != NULL);
@@ -97,6 +105,7 @@ int main(void) {
     invalid_cluster.ingestion_principal = operator_user;
     assert(keystone_qihse_bridge_init(&invalid_cluster) == -1);
 
+    assert(qihse_auth_destroy_user(operator_user, BRIDGE_GUEST_ID));
     qihse_kv_store_destroy(store);
     puts("KEYSTONE/QIHSE bridge authorization and ABI regression passed");
     return 0;

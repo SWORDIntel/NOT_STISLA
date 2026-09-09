@@ -7,7 +7,7 @@
 #include "qihse_auth.h"
 #include "qihse_kv_store.h"
 
-#define BRIDGE_GUEST_ID 62001u
+#define BRIDGE_GUEST_ID 620u
 #define BRIDGE_OPERATOR_PASSWORD "KeystoneBridgeOperatorPass1!"
 #define BRIDGE_GUEST_PASSWORD "KeystoneBridgeGuestPass1!"
 

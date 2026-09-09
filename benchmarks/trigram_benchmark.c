@@ -10,6 +10,19 @@ static double get_time_sec(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
+static const void* bounded_memmem(const void* haystack, size_t haystack_len,
+                                  const void* needle, size_t needle_len) {
+    const unsigned char* h = (const unsigned char*)haystack;
+    const unsigned char* n = (const unsigned char*)needle;
+    if (!haystack || !needle) return NULL;
+    if (needle_len == 0u) return haystack;
+    if (haystack_len < needle_len) return NULL;
+    for (size_t i = 0u; i <= haystack_len - needle_len; i++) {
+        if (h[i] == n[0] && memcmp(h + i, n, needle_len) == 0) return h + i;
+    }
+    return NULL;
+}
+
 int main(void) {
     printf("====================================================\n");
     printf("  KEYSTONE Trigram Search Benchmark (tgrep-style)   \n");
@@ -45,7 +58,7 @@ int main(void) {
     double start_time = get_time_sec();
     size_t brute_matches = 0;
     for (size_t i = 0; i < NUM_DOCS; i++) {
-        if (memmem(docs[i], DOC_SIZE, needle, needle_len) != NULL) {
+        if (bounded_memmem(docs[i], DOC_SIZE, needle, needle_len) != NULL) {
             brute_matches++;
         }
     }

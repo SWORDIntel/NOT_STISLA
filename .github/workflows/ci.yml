@@ -50,8 +50,10 @@ jobs:
           STATUS6=${PIPESTATUS[0]}
           ./bin/test_tar_zst 2>&1 | tee .github/ci-artifacts/test_tar_zst.log
           STATUS7=${PIPESTATUS[0]}
+          ./bin/test_trigram_index 2>&1 | tee .github/ci-artifacts/test_trigram_index.log
+          STATUS8=${PIPESTATUS[0]}
           TEST_STATUS=0
-          if [ "$STATUS1" -ne 0 ] || [ "$STATUS2" -ne 0 ] || [ "$STATUS3" -ne 0 ] || [ "$STATUS4" -ne 0 ] || [ "$STATUS5" -ne 0 ] || [ "$STATUS6" -ne 0 ] || [ "$STATUS7" -ne 0 ]; then
+          if [ "$STATUS1" -ne 0 ] || [ "$STATUS2" -ne 0 ] || [ "$STATUS3" -ne 0 ] || [ "$STATUS4" -ne 0 ] || [ "$STATUS5" -ne 0 ] || [ "$STATUS6" -ne 0 ] || [ "$STATUS7" -ne 0 ] || [ "$STATUS8" -ne 0 ]; then
             TEST_STATUS=1
           fi
           END_TS=$(date -u +%s)
@@ -71,6 +73,7 @@ jobs:
             echo "test_performance_fix_status: $STATUS5"
             echo "test_telemetry_processor_perf_status: $STATUS6"
             echo "test_tar_zst_status: $STATUS7"
+            echo "test_trigram_index_status: $STATUS8"
             echo "ref: ${{ github.ref }}"
             echo "sha: ${{ github.sha }}"
           } > .github/ci-artifacts/ci-summary.md
@@ -92,3 +95,83 @@ jobs:
         if: always()
         run: |
           echo "::notice file=.github/ci-artifacts/ci-summary.md,title=KEYSTONE CI Summary::See attached artifact 'stisorter-ci-artifacts'"
+
+  trigram-sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install compiler
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Check core C11 portability with Clang
+        run: |
+          clang -std=c11 -Wall -Wextra -Werror=implicit-function-declaration \
+            -I./include -I./src -fsyntax-only src/keystone.c
+
+      - name: Build trigram regression with ASan and UBSan
+        run: |
+          mkdir -p bin
+          clang -std=c11 -O1 -g -Wall -Wextra -Werror=implicit-function-declaration \
+            -I./include -fsanitize=address,undefined -fno-omit-frame-pointer \
+            src/keystone_trigram.c tests/test_trigram_index.c \
+            -o bin/test_trigram_index -fsanitize=address,undefined
+
+      - name: Run trigram sanitizer regression
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ./bin/test_trigram_index
+
+  qihse-bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout KEYSTONE
+        uses: actions/checkout@v4
+
+      - name: Checkout QIHSE security branch
+        uses: actions/checkout@v4
+        with:
+          repository: SWORDIntel/QIHSE
+          ref: security/keystone-regression-hardening-20260908
+          path: qihse
+          submodules: recursive
+
+      - name: Install bridge build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc g++ libpthread-stubs0-dev libssl-dev liburing-dev libsqlite3-dev libluajit-5.1-dev libbpf-dev libxdp-dev clang ninja-build cmake python3-dev python3-pip python3-numpy libarchive-dev libzstd-dev nlohmann-json3-dev
+
+      - name: Build QIHSE library
+        run: make -C qihse lib -j$(nproc)
+
+      - name: Build KEYSTONE with QIHSE bridge
+        run: |
+          set -o pipefail
+          make clean
+          make KEYSTONE_ENABLE_QIHSE_BRIDGE=1 KEYSTONE_ENABLE_FORTRAN=0 QIHSE_ROOT="$GITHUB_WORKSPACE/qihse" lib -j$(nproc) 2>&1 | tee keystone-qihse-bridge-build.log
+
+      - name: Upload bridge build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keystone-qihse-bridge-build-log
+          path: keystone-qihse-bridge-build.log
+          if-no-files-found: error
+
+      - name: Build bridge authorization regression
+        run: |
+          mkdir -p bin
+          gcc -O2 -Wall -Wextra -Werror=implicit-function-declaration \
+            -I./include -I"$GITHUB_WORKSPACE/qihse/include" \
+            tests/test_qihse_bridge_integration.c \
+            -L. -lkeystone -L"$GITHUB_WORKSPACE/qihse" -lqihse \
+            -Wl,-rpath,"$GITHUB_WORKSPACE" \
+            -Wl,-rpath,"$GITHUB_WORKSPACE/qihse" \
+            -lpthread -lm -o bin/test_qihse_bridge_integration
+
+      - name: Run bridge authorization regression
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}:${{ github.workspace }}/qihse
+        run: ./bin/test_qihse_bridge_integration

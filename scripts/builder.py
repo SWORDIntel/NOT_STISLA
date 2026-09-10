@@ -61,8 +61,12 @@ def banner(title: str) -> None:
     inner = WIDTH - 2
     top    = f"╭{'─' * inner}╮"
     bottom = f"╰{'─' * inner}╯"
+    vl = visible_len(title)
+    pad = max(0, inner - 2 - vl)
+    left = pad // 2
+    right = pad - left
     print(f"\n  {c(top, RED)}")
-    print(f"  {c('│', RED)} {c(pad_right(title, inner - 2), RED, BOLD)} {c('│', RED)}")
+    print(f"  {c('│', RED)} {' ' * left}{c(title, RED, BOLD)}{' ' * right} {c('│', RED)}")
     print(f"  {c(bottom, RED)}")
 
 
@@ -337,7 +341,7 @@ def install_opt() -> None:
 # ── Main ───────────────────────────────────────────────────────────────
 
 def main() -> None:
-    banner("KEYSTONE BUILDER")
+    banner("K E Y S T O N E")
     feat = detect_cpu()
 
     section("ARCHITECTURE DETECTION")

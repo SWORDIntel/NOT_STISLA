@@ -51,8 +51,19 @@ WHITE  = "\033[97m"
 GREEN  = "\033[32m"
 YELLOW = "\033[33m"
 GRAY   = "\033[38;5;240m"
+DIMRED = "\033[38;5;52m"    # dark red for logo
 
 WIDTH = 80
+
+# ── SWORDIntel logo (12x6 ASCII, from sword_logo.png) ──────────────────
+SWORD_LOGO = [
+    "███▓▓▓▓▓▓███",
+    "██▓░░█▓░░▓██",
+    "█▓▓░▓█▓░░▓▓█",
+    "█▓▓▓███▓░▓▓█",
+    "██▓▓░▓▓░▓▓██",
+    "███▓▓▓▓▓▓███",
+]
 
 
 def c(text: str, *colors: str) -> str:
@@ -75,6 +86,16 @@ def banner(title: str) -> None:
 def section(title: str) -> None:
     print(f"\n  {c('◆', RED)} {c(title, RED, BOLD)}")
     print(f"  {c('─' * (WIDTH - 2), GRAY)}")
+
+
+def success_box(msg: str) -> None:
+    """Green rounded box for success messages."""
+    inner = WIDTH - 4
+    top    = f"╭{'─' * inner}╮"
+    bottom = f"╰{'─' * inner}╯"
+    print(f"\n  {c(top, GREEN)}")
+    print(f"  {c('│', GREEN)} {pad_right(msg, inner - 2)} {c('│', GREEN)}")
+    print(f"  {c(bottom, GREEN)}")
 
 
 def warning_box(lines: list[str]) -> None:
@@ -796,10 +817,13 @@ def main() -> None:
         setup_integration(alias_name, out_path, "KEYSTONE")
 
     done_line = c("Done.", GREEN, BOLD) + "  " + c("KEYSTONE build complete.", DIM)
-    inner_w = WIDTH - 4
-    print(f"\n  {c('╭' + '─' * (WIDTH - 2) + '╮', GREEN)}")
-    print(f"  {c('│', GREEN)} {pad_right(done_line, inner_w)} {c('│', GREEN)}")
-    print(f"  {c('╰' + '─' * (WIDTH - 2) + '╯', GREEN)}\n")
+    success_box(done_line)
+
+    # SWORDIntel logo — unobtrusive bottom-left
+    print()
+    for line in SWORD_LOGO:
+        print(f"  {c(line, DIMRED, DIM)}")
+    print(f"  {c('S W O R D I n t e l', DIMRED, DIM)}")
 
 
 if __name__ == "__main__":

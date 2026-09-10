@@ -202,7 +202,7 @@ bin/test_telemetry_processor_perf: $(OBJS) tests/test_telemetry_processor_perf.o
 bin/test_performance_fix: $(OBJS) tests/test_performance_fix.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-bin/test_trigram_index: $(OBJS) tests/test_trigram_index.o | bin
+bin/test_trigram_index: $(OBJS) $(FORTRAN_OBJ) tests/test_trigram_index.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 bin/test_tar_zst: $(OBJS) tests/test_tar_zst.o | bin
@@ -215,7 +215,7 @@ benchmarks/dsmil_benchmark: $(OBJS) benchmarks/dsmil_benchmark.o benchmarks/benc
 benchmarks/performance_proof: $(OBJS) benchmarks/performance_proof.o benchmarks/benchmark_writer.o
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-benchmarks/trigram_benchmark: $(OBJS) benchmarks/trigram_benchmark.o
+benchmarks/trigram_benchmark: $(OBJS) $(FORTRAN_OBJ) benchmarks/trigram_benchmark.o
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 # Fortran backend (optional) — compiled into libkeystone.so directly

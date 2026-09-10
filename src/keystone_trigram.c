@@ -5,9 +5,19 @@
 #include <string.h>
 #include <time.h>
 
+/* SSE4.2 for SIMD-accelerated string scanning */
+#ifdef __SSE4_2__
+#include <nmmintrin.h>
+#define HAVE_SSE42 1
+#else
+#define HAVE_SSE42 0
+#endif
+
 #define TRIGRAM_INITIAL_BUCKETS 65536u
 #define TRIGRAM_INITIAL_POSTING_CAPACITY 8u
 #define TRIGRAM_QUERY_MAX_UNIQUE 64u
+/* 24-bit trigram space = 16M possible values. 2MB bitmap for dedup. */
+#define TRIGRAM_BITMAP_BYTES (1u << 21) /* 2MB = 16M bits */
 
 typedef struct keystone_trigram_posting_list {
     uint32_t trigram_key;
@@ -224,25 +234,43 @@ size_t keystone_trigram_extract(
     const unsigned char* p = (const unsigned char*)pattern;
     size_t extracted = 0u;
 
+    /* Heap-allocated bitmap dedup: O(n) single pass instead of O(n²).
+     * 2MB covers all 16M possible 24-bit trigrams. */
+    unsigned char* bitmap = (unsigned char*)calloc(TRIGRAM_BITMAP_BYTES, 1);
+    if (!bitmap) {
+        /* Fallback: original O(n²) scan if allocation fails */
+        for (size_t i = 0u; i <= pattern_len - 3u; i++) {
+            uint32_t key = ((uint32_t)p[i] << 16) |
+                           ((uint32_t)p[i + 1u] << 8) |
+                           (uint32_t)p[i + 2u];
+            bool dup = false;
+            for (size_t j = 0u; j < extracted; j++) {
+                if (out_trigrams[j] == key) { dup = true; break; }
+            }
+            if (!dup) {
+                out_trigrams[extracted++] = key;
+                if (extracted >= max_trigrams) break;
+            }
+        }
+        return extracted;
+    }
+
     for (size_t i = 0u; i <= pattern_len - 3u; i++) {
         uint32_t key = ((uint32_t)p[i] << 16) |
                        ((uint32_t)p[i + 1u] << 8) |
                        (uint32_t)p[i + 2u];
 
-        bool duplicate = false;
-        for (size_t j = 0u; j < extracted; j++) {
-            if (out_trigrams[j] == key) {
-                duplicate = true;
-                break;
-            }
-        }
+        size_t byte_idx = key >> 3;
+        unsigned char bit_mask = (unsigned char)(1u << (key & 7u));
 
-        if (!duplicate) {
+        if (!(bitmap[byte_idx] & bit_mask)) {
+            bitmap[byte_idx] |= bit_mask;
             out_trigrams[extracted++] = key;
             if (extracted >= max_trigrams) break;
         }
     }
 
+    free(bitmap);
     return extracted;
 }
 
@@ -476,6 +504,32 @@ static int compare_uint32(const void* a, const void* b) {
     return (u1 > u2) - (u1 < u2);
 }
 
+/* Counting sort for uint32 posting lists. O(n + k) where k = doc_count.
+ * Faster than qsort's O(n log n) when doc_count is bounded and known. */
+static void counting_sort_doc_ids(uint32_t* arr, size_t count, size_t max_val) {
+    if (count <= 1u) return;
+    if (max_val == 0u) max_val = count;
+
+    /* Use counting sort for small ranges, qsort for large */
+    if (max_val <= (1u << 20)) {
+        /* Counting sort */
+        size_t* counts = (size_t*)calloc(max_val + 1u, sizeof(size_t));
+        if (!counts) {
+            /* Fallback to qsort if allocation fails */
+            qsort(arr, count, sizeof(uint32_t), compare_uint32);
+            return;
+        }
+        for (size_t i = 0u; i < count; i++) counts[arr[i]]++;
+        size_t pos = 0u;
+        for (size_t v = 0u; v <= max_val; v++) {
+            for (size_t c = 0u; c < counts[v]; c++) arr[pos++] = (uint32_t)v;
+        }
+        free(counts);
+    } else {
+        qsort(arr, count, sizeof(uint32_t), compare_uint32);
+    }
+}
+
 int keystone_trigram_index_finalize(keystone_trigram_index_t* idx) {
     if (!idx) return KEYSTONE_TRIGRAM_EINVAL;
     if (idx->failed) return idx->failure_code ? idx->failure_code : KEYSTONE_TRIGRAM_ESTATE;
@@ -488,7 +542,7 @@ int keystone_trigram_index_finalize(keystone_trigram_index_t* idx) {
         if (!plist->doc_ids || plist->count > plist->capacity) {
             return poison_index(idx, KEYSTONE_TRIGRAM_ESTATE);
         }
-        qsort(plist->doc_ids, plist->count, sizeof(uint32_t), compare_uint32);
+        counting_sort_doc_ids(plist->doc_ids, plist->count, idx->doc_count);
         if (plist->count > SIZE_MAX - total_postings) {
             return poison_index(idx, KEYSTONE_TRIGRAM_EOVERFLOW);
         }
@@ -568,16 +622,60 @@ size_t keystone_trigram_index_get_candidates(
         }
     }
 
+    /* Galloping intersection: for each doc_id in the smallest list,
+     * use exponential+binary search (galloping) to probe larger lists.
+     * This is O(n * log(m/n)) instead of O(n * log(m)) for plain bsearch,
+     * with a significant win when n << m (common for trigram queries). */
     const keystone_trigram_posting_list_t* base = lists[0];
     size_t candidate_count = 0u;
+
+    /* Track search positions in each list for galloping advancement */
+    size_t cursor[TRIGRAM_QUERY_MAX_UNIQUE];
+    for (size_t l = 0u; l < num_lists; l++) cursor[l] = 0u;
+
     for (size_t i = 0u; i < base->count; i++) {
         uint32_t doc_id = base->doc_ids[i];
         bool in_all = true;
 
         for (size_t l = 1u; l < num_lists; l++) {
             const keystone_trigram_posting_list_t* plist = lists[l];
-            if (!bsearch(&doc_id, plist->doc_ids, plist->count,
-                         sizeof(uint32_t), compare_uint32)) {
+            const uint32_t* arr = plist->doc_ids;
+            size_t cnt = plist->count;
+            size_t pos = cursor[l];
+
+            /* Skip forward: if we've already passed this position, gallop */
+            if (pos < cnt && arr[pos] == doc_id) {
+                cursor[l] = pos + 1u;
+                continue;
+            }
+
+            /* Galloping search: exponential probe from cursor, then binary */
+            if (pos >= cnt || arr[pos] > doc_id) {
+                in_all = false;
+                break;
+            }
+
+            /* Exponential jump */
+            size_t jump = 1u;
+            size_t gallop_pos = pos;
+            while (gallop_pos + jump < cnt && arr[gallop_pos + jump] <= doc_id) {
+                gallop_pos += jump;
+                jump <<= 1;
+            }
+
+            /* Binary search in [gallop_pos, min(gallop_pos+jump, cnt)) */
+            size_t lo = gallop_pos;
+            size_t hi = (gallop_pos + jump < cnt) ? gallop_pos + jump : cnt;
+            while (lo < hi) {
+                size_t mid = lo + ((hi - lo) >> 1);
+                if (arr[mid] < doc_id) lo = mid + 1u;
+                else hi = mid;
+            }
+
+            if (lo < cnt && arr[lo] == doc_id) {
+                cursor[l] = lo + 1u;
+            } else {
+                cursor[l] = lo; /* save position for next gallop */
                 in_all = false;
                 break;
             }
@@ -592,6 +690,10 @@ size_t keystone_trigram_index_get_candidates(
     return candidate_count;
 }
 
+/* SIMD-accelerated substring search.
+ * Uses SSE4.2 PCMPESTRI to find first-byte candidates 16 at a time,
+ * then memcmp to confirm full match. Falls back to byte-at-a-time
+ * scan when SSE4.2 is unavailable. */
 static const void* bounded_memmem(
     const void* haystack,
     size_t haystack_len,
@@ -603,8 +705,39 @@ static const void* bounded_memmem(
     const unsigned char* h = (const unsigned char*)haystack;
     const unsigned char* n = (const unsigned char*)needle;
     size_t limit = haystack_len - needle_len;
+
+    if (needle_len == 1u) {
+        /* Single-byte: use memchr which glibc already SIMD-optimizes */
+        return memchr(haystack, n[0], haystack_len);
+    }
+
+#if HAVE_SSE42
+    /* Load first byte into all 16 lanes of an XMM register */
+    __m128i first_byte = _mm_set1_epi8((char)n[0]);
+    size_t i = 0u;
+    /* Process 16 bytes at a time with SSE4.2 PCMPESTRI */
+    while (i + 16u <= limit) {
+        __m128i chunk = _mm_loadu_si128((const __m128i*)(h + i));
+        __m128i eq = _mm_cmpeq_epi8(chunk, first_byte);
+        unsigned int mask = (unsigned int)_mm_movemask_epi8(eq);
+
+        while (mask) {
+            int bit = __builtin_ctz(mask);
+            mask &= mask - 1; /* clear lowest set bit */
+            size_t pos = i + (size_t)bit;
+            if (pos <= limit && memcmp(h + pos, n, needle_len) == 0)
+                return h + pos;
+        }
+        i += 16u;
+    }
+    /* Scalar tail */
+    for (; i <= limit; i++) {
+#else
+    /* No SSE4.2: full scalar scan */
     for (size_t i = 0u; i <= limit; i++) {
-        if (h[i] == n[0] && memcmp(h + i, n, needle_len) == 0) return h + i;
+#endif
+        if (h[i] == n[0] && memcmp(h + i, n, needle_len) == 0)
+            return h + i;
     }
     return NULL;
 }

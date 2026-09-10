@@ -102,3 +102,18 @@ Measured on Intel Xeon E5-2407 (8 cores, AVX mode) via `make bench-keystone-inte
 
 
 The defensible claim today is narrower and stronger: KEYSTONE is a native, target-silicon-tuned search library with tested scalar, batch, archive, telemetry, optional Fortran, and optional OpenMP paths, plus host-dependent SIMD local scan support. GPU and NPU acceleration are roadmap backend families, not current implementation claims.
+
+## Trigram Index Benchmarks (SSE4.2 + Algorithmic)
+
+See [TRIGRAM_BENCHMARK.md](TRIGRAM_BENCHMARK.md) for full details.
+
+| Corpus | Brute-force | Trigram Search | Speedup | Rejection |
+|--------|------------|----------------|---------|-----------|
+| 1 MB | 1.26 ms | 0.017 ms | 77x | 98.05% |
+| 10 MB | 23.83 ms | 0.024 ms | 1,002x | 99.80% |
+| 100 MB | 99.50 ms | 0.141 ms | 705x | 99.80% |
+| 1 GB | 1,021 ms | 0.976 ms | 1,046x | 99.98% |
+
+Optimizations: SSE4.2 batch trigram extraction (14/16 bytes), dual-byte
+SIMD memmem, Fibonacci hash (2 ops), split hash table (L2-resident keys),
+per-document dedup bitmap, shared counting sort.

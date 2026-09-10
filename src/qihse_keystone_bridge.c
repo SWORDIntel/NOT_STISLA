@@ -176,50 +176,41 @@ int keystone_qihse_bridge_dispatch_credential_authenticated(
 int keystone_qihse_bridge_dispatch_credential_authenticated(
     const char* email,
     const char* pass,
-    int semantic_class)
-{
-    if (!g_bridge_active) return -1;
-    if (!email || !pass) return -1;
+    int semantic_class
+) {
+    if (!email || !pass || email[0] == '\0') return -1;
 
-    /* Per QIHSE's security model (AGENTS.md invariant #1), no classified
-     * write primitive may be invoked without an explicit authenticated
-     * security context.  Refuse the write if no principal is set. */
-    qihse_user_t* principal = (qihse_user_t*)g_bridge_cfg.ingestion_principal;
-    if (!principal) {
-        return -1;
-    }
+    keystone_qihse_bridge_config_t cfg;
+    if (snapshot_bridge_config(&cfg) != 0) return -1;
 
-    qihse_kv_store_t* kv = (qihse_kv_store_t*)g_bridge_cfg.kv_target;
-    uint16_t clearance   = g_bridge_cfg.default_clearance;
-    uint16_t compartment = g_bridge_cfg.default_compartment;
+    qihse_user_t* principal = (qihse_user_t*)cfg.ingestion_principal;
+    if (!principal) return -1;
 
-    if (g_bridge_cfg.num_cluster_nodes > 0 && g_bridge_cfg.cluster_targets) {
-        uint32_t slot = keystone_qihse_bridge_route_slot(email, strlen(email));
-        uint32_t node = keystone_qihse_bridge_slot_to_node(slot, g_bridge_cfg.num_cluster_nodes);
-        qihse_kv_store_t* node_kv = (qihse_kv_store_t*)g_bridge_cfg.cluster_targets[node];
-        if (node_kv) {
-            kv = node_kv;
-        }
-    } else if (!kv) {
-        return -1;
-    }
+    qihse_kv_store_t* kv = select_target(&cfg, email);
+    if (!kv) return -1;
 
     char enriched_value[512];
-    snprintf(enriched_value, sizeof(enriched_value), "class=%d|pass=%s", semantic_class, pass);
+    int written = snprintf(
+        enriched_value, sizeof(enriched_value), "class=%d|pass=%s", semantic_class, pass);
+    if (written < 0 || (size_t)written >= sizeof(enriched_value)) {
+        secure_zero(enriched_value, sizeof(enriched_value));
+        return -1;
+    }
 
-    /* Authenticated write: propagates the ingestion principal to QIHSE's
-     * authorization layer so the write inherits clearance + SCI compartment
-     * enforcement rather than being a context-free write. */
-    int rc = qihse_kv_set_user(
+    bool stored = qihse_kv_set_user(
         kv,
         email,
         enriched_value,
-        clearance,
-        compartment,
-        principal
-    );
+        cfg.default_clearance,
+        cfg.default_compartment,
+        principal);
 
-    return rc;
+    secure_zero(enriched_value, sizeof(enriched_value));
+
+    /* Preserve the public bridge ABI: zero is success, negative is failure.
+     * QIHSE's KV API is boolean, so never leak its 1/0 convention through the
+     * bridge boundary. */
+    return stored ? 0 : -1;
 }
 
 #else
@@ -262,8 +253,8 @@ void keystone_qihse_bridge_set_principal(void* principal) {
 int keystone_qihse_bridge_dispatch_credential_authenticated(
     const char* email,
     const char* pass,
-    int semantic_class)
-{
+    int semantic_class
+) {
     (void)email;
     (void)pass;
     (void)semantic_class;

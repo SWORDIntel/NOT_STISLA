@@ -837,11 +837,11 @@ def main() -> None:
 
     # Single review prompt — Enter to build, m to modify
     review = safe_input(f"\n  {c('◆', RED)} {c('Press Enter to build, or m for menus', WHITE)} ").strip().lower()
-    if review == "m":
-        # Re-run with menus
-        sys.argv.extend(["--modify"])
-        main()
-        return
+    if review == "m" and not args.modify:
+        args.modify = True
+        # Fall through to interactive menus below by re-entering the modify block
+        # Simpler: just restart with the flag
+        os.execv(sys.executable, [sys.executable] + sys.argv + ["--modify"])
 
     build(march, BUILD_TARGETS[build_choice][0], clean, jobs)
 

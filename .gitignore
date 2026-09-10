@@ -5,18 +5,27 @@
 *.out
 *.exe
 bin/
+lib/
 .build_lib/
 
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
+# Generated headers
+include/keystone/
+
+# Benchmark binaries (built, not source)
+benchmarks/dsmil_benchmark
+benchmarks/performance_proof
+benchmarks/trigram_benchmark
 
 # Benchmark results & generated artifacts
 benchmark_comparison.png
 benchmark_results.csv
 bench_results/
 charts/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
 
 # CI artifacts
 .github/ci-artifacts/

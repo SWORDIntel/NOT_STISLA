@@ -14,6 +14,8 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 import unicodedata
 from pathlib import Path
 
@@ -36,6 +38,7 @@ def pad_right(s: str, width: int) -> str:
     """Pad string on the right so its visible width equals width."""
     vl = visible_len(s)
     return s + " " * max(0, width - vl)
+
 
 # ── SWORD cyber-dark ANSI palette ──────────────────────────────────────
 BG     = "\033[48;5;233m"   # #08080a near-black
@@ -99,6 +102,84 @@ def warn(msg: str) -> None:
 
 def fail(msg: str) -> None:
     print(f"  {c('✗', RED)} {msg}")
+
+
+def countdown_prompt(prompt: str, seconds: int = 5) -> bool:
+    """Show a countdown prompt that defaults to yes after N seconds."""
+    import select
+    import termios
+    import tty
+
+    old = None
+    try:
+        old = termios.tcgetattr(sys.stdin)
+        tty.setcbreak(sys.stdin.fileno())
+    except (termios.error, AttributeError):
+        print(f"  {c('◆', RED)} {prompt} [{c('Y', GREEN)}/n] {c('(auto-yes)', DIM)}")
+        return True
+
+    result = True
+    try:
+        for i in range(seconds, 0, -1):
+            sys.stdout.write(f"\r  {c('◆', RED)} {prompt} [{c('Y', GREEN)}/n] {c(f'auto-yes in {i}s', YELLOW)}  ")
+            sys.stdout.flush()
+            r, _, _ = select.select([sys.stdin], [], [], 1.0)
+            if r:
+                ch = sys.stdin.read(1)
+                if ch.lower() == "n":
+                    result = False
+                    break
+                elif ch.lower() == "y" or ch in ("\n", "\r"):
+                    result = True
+                    break
+        else:
+            result = True
+    finally:
+        if old:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old)
+    label = c("✓ yes", GREEN) if result else c("✗ no", RED)
+    sys.stdout.write(f"\r  {c('◆', RED)} {prompt} [{c('Y', GREEN)}/n] {label}{' ' * 20}\r\n")
+    return result
+
+
+# Progress bar state
+_progress_stop = threading.Event()
+_progress_thread = None
+
+
+def start_progress(msg: str = "Building") -> None:
+    """Start an animated progress bar on a background thread."""
+    global _progress_stop, _progress_thread
+    _progress_stop.clear()
+    frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def _spin():
+        i = 0
+        while not _progress_stop.is_set():
+            bar_len = 20
+            filled = (i // 2) % (bar_len + 1)
+            bar = c("█", RED) * filled + c("░", GRAY) * (bar_len - filled)
+            sys.stdout.write(f"\r  {c(frames[i % len(frames)], RED)} {msg}  {bar} ")
+            sys.stdout.flush()
+            time.sleep(0.1)
+            i += 1
+
+    _progress_thread = threading.Thread(target=_spin, daemon=True)
+    _progress_thread.start()
+
+
+def stop_progress(success: bool = True) -> None:
+    """Stop the progress bar and show final state."""
+    global _progress_stop, _progress_thread
+    _progress_stop.set()
+    if _progress_thread:
+        _progress_thread.join(timeout=0.5)
+        _progress_thread = None
+    bar_len = 20
+    bar = c("█", GREEN if success else RED) * bar_len
+    label = c("done", GREEN) if success else c("failed", RED)
+    sys.stdout.write(f"\r  {c('●', GREEN if success else RED)} {label}  {bar}{' ' * 10}\r\n")
+    sys.stdout.flush()
 
 
 def run(cmd: list[str] | str, cwd: Path | None = None, check: bool = True,
@@ -279,14 +360,27 @@ def build(march: str | None, target: str, clean: bool, jobs: int) -> None:
 
     info(f"Target: {c(target, CYAN)}  march={c(march or 'native', CYAN)}  jobs={c(str(jobs), CYAN)}")
     info(f"Command: {' '.join(make_args)}")
-    print()
-    rc = run(make_args, cwd=ROOT, check=False)
-    print()
-    if rc == 0:
+
+    start_progress(f"Building {target}")
+    proc = subprocess.Popen(make_args, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    output = []
+    for line in proc.stdout:
+        output.append(line)
+    proc.wait()
+    stop_progress(success=proc.returncode == 0)
+
+    # Print build output
+    if output:
+        print(f"  {c('─' * (WIDTH - 2), GRAY)}")
+        for line in output:
+            print(f"  {line}", end="" if line.endswith("\n") else "\n")
+        print(f"  {c('─' * (WIDTH - 2), GRAY)}")
+
+    if proc.returncode == 0:
         ok(f"Build successful — {target}")
     else:
-        fail(f"Build failed (exit {rc})")
-        sys.exit(rc)
+        fail(f"Build failed (exit {proc.returncode})")
+        sys.exit(proc.returncode)
 
 
 def install_opt(dest: Path) -> None:
@@ -301,22 +395,31 @@ def install_opt(dest: Path) -> None:
     lib = ROOT / "libkeystone.so"
     fortran_lib = ROOT / "fortran" / "libkeystone_batch.so"
 
+    def safe_copy(src: Path, dst: Path) -> bool:
+        try:
+            if src.resolve() == dst.resolve():
+                return False
+            shutil.copy2(src, dst)
+            return True
+        except (shutil.SameFileError, OSError):
+            return False
+
     if lib.exists():
-        shutil.copy2(lib, dest / "lib" / "libkeystone.so")
+        safe_copy(lib, dest / "lib" / "libkeystone.so")
         ok(f"libkeystone.so → {dest}/lib/")
     if fortran_lib.exists():
-        shutil.copy2(fortran_lib, dest / "lib" / "libkeystone_batch.so")
+        safe_copy(fortran_lib, dest / "lib" / "libkeystone_batch.so")
         ok(f"libkeystone_batch.so → {dest}/lib/")
 
     # Binaries
     bin_count = 0
     for b in (ROOT / "bin").glob("test_*"):
-        shutil.copy2(b, dest / "bin" / b.name)
-        bin_count += 1
+        if safe_copy(b, dest / "bin" / b.name):
+            bin_count += 1
     for b in (ROOT / "benchmarks").glob("*_benchmark"):
         if b.is_file() and os.access(b, os.X_OK):
-            shutil.copy2(b, dest / "bin" / b.name)
-            bin_count += 1
+            if safe_copy(b, dest / "bin" / b.name):
+                bin_count += 1
     ok(f"binaries → {dest}/bin/ ({bin_count} files)")
 
     # Headers
@@ -324,7 +427,7 @@ def install_opt(dest: Path) -> None:
     inc_dst = dest / "include" / "keystone"
     inc_dst.mkdir(parents=True, exist_ok=True)
     for h in inc_src.glob("*.h"):
-        shutil.copy2(h, inc_dst / h.name)
+        safe_copy(h, inc_dst / h.name)
     ok(f"headers → {dest}/include/keystone/ ({len(list(inc_dst.glob('*.h')))} files)")
 
     # Symlink
@@ -376,10 +479,10 @@ def setup_integration(alias_name: str, dest: Path, project: str) -> None:
         print(f"  {c(e, DIM)}")
     print()
 
-    # Offer to persist
+    # Offer to persist with 5s countdown (default yes)
     if not shell_rcs:
         return
-    if input(f"  {c('◆', RED)} {c('Persist in shell configs?', WHITE)} [Y/n] ").strip().lower() in ("n", "no"):
+    if not countdown_prompt("Persist in shell configs?", seconds=5):
         return
 
     block = f"\n# {alias_name} — set by {project} builder\n" + "\n".join(exports) + "\n"

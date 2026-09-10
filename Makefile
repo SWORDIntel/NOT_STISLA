@@ -2,7 +2,8 @@
 # Standard make / make test workflow
 
 CC      := gcc
-CFLAGS  := -O3 -march=native -fPIC -Wall -Wextra -Werror=implicit-function-declaration -I./include -DKEYSTONE_ENABLE_PLATFORM_TUNING
+MARCH   ?= native
+CFLAGS  := -O3 -march=$(MARCH) -fPIC -Wall -Wextra -Werror=implicit-function-declaration -I./include -DKEYSTONE_ENABLE_PLATFORM_TUNING
 LDFLAGS := -lm
 
 # Optional OpenMP (default: auto-enabled if the compiler supports it,

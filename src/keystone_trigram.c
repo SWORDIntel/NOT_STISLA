@@ -18,9 +18,10 @@
 #define TRIGRAM_QUERY_MAX_UNIQUE 64u
 /* 24-bit trigram space = 16M possible values. 2MB bitmap for dedup. */
 #define TRIGRAM_BITMAP_BYTES (1u << 21) /* 2MB = 16M bits */
+/* Sentinel for empty hash buckets. Outside the 24-bit trigram key range. */
+#define TRIGRAM_KEY_EMPTY 0xFFFFFFFFu
 
 typedef struct keystone_trigram_posting_list {
-    uint32_t trigram_key;
     uint32_t* doc_ids;
     size_t count;
     size_t capacity;
@@ -35,13 +36,27 @@ typedef struct keystone_trigram_doc {
 } keystone_trigram_doc_t;
 
 struct keystone_trigram_index {
-    keystone_trigram_posting_list_t* buckets;
+    /* Split hash table: bucket_keys holds 4-byte keys (or TRIGRAM_KEY_EMPTY),
+     * probed cache-efficiently during lookups. bucket_lists holds the inline
+     * posting list structs, only dereferenced on a key match. */
+    uint32_t* bucket_keys;
+    keystone_trigram_posting_list_t* bucket_lists;
     size_t num_buckets;
     size_t unique_trigrams;
 
     keystone_trigram_doc_t* docs;
     size_t doc_count;
     size_t doc_capacity;
+
+    /* Per-document trigram dedup bitmap. Allocated once, reused across
+     * documents. 2MB covers the full 24-bit trigram space (16M values).
+     * doc_seen_touched tracks which bytes were set so clearing is O(unique)
+     * instead of O(2MB). This skips redundant hash lookups for trigrams
+     * that already appeared in the current document. */
+    unsigned char* doc_seen;
+    size_t* doc_seen_touched;
+    size_t doc_seen_touched_count;
+    size_t doc_seen_touched_cap;
 
     bool is_finalized;
     bool failed;
@@ -106,16 +121,11 @@ static char* duplicate_content(const char* text, size_t text_len) {
     return copy;
 }
 
-/* FNV-1a hash for 24-bit trigrams into a power-of-two bucket table. */
+/* Fibonacci hashing: 1 multiply + 1 shift. 0x9E3779B1 = 2^32/phi (golden
+ * ratio), giving excellent distribution for power-of-two table sizes. */
 static inline size_t hash_trigram_key(uint32_t key, size_t num_buckets) {
-    uint32_t h = 2166136261u;
-    h ^= (key & 0xFFu);
-    h *= 16777619u;
-    h ^= ((key >> 8) & 0xFFu);
-    h *= 16777619u;
-    h ^= ((key >> 16) & 0xFFu);
-    h *= 16777619u;
-    return (size_t)h & (num_buckets - 1u);
+    unsigned shift = 32u - (unsigned)__builtin_ctzll((unsigned long long)num_buckets);
+    return (size_t)((key * 0x9E3779B1u) >> shift);
 }
 
 static inline uint64_t get_time_ns(void) {
@@ -125,7 +135,7 @@ static inline uint64_t get_time_ns(void) {
 }
 
 static int resize_trigram_hash_table(keystone_trigram_index_t* idx) {
-    if (!idx || !idx->buckets || idx->num_buckets == 0u) {
+    if (!idx || !idx->bucket_keys || !idx->bucket_lists || idx->num_buckets == 0u) {
         return KEYSTONE_TRIGRAM_EINVAL;
     }
     if (idx->num_buckets > SIZE_MAX / 2u) {
@@ -133,30 +143,43 @@ static int resize_trigram_hash_table(keystone_trigram_index_t* idx) {
     }
 
     size_t new_num_buckets = idx->num_buckets * 2u;
-    size_t bytes;
-    if (!checked_mul_size(new_num_buckets, sizeof(keystone_trigram_posting_list_t), &bytes)) {
+    size_t keys_bytes;
+    if (!checked_mul_size(new_num_buckets, sizeof(uint32_t), &keys_bytes)) {
         return KEYSTONE_TRIGRAM_EOVERFLOW;
     }
-    (void)bytes;
-
-    keystone_trigram_posting_list_t* new_buckets =
-        (keystone_trigram_posting_list_t*)calloc(
-            new_num_buckets, sizeof(keystone_trigram_posting_list_t));
-    if (!new_buckets) return KEYSTONE_TRIGRAM_ENOMEM;
-
-    for (size_t i = 0u; i < idx->num_buckets; i++) {
-        if (idx->buckets[i].capacity == 0u) continue;
-
-        uint32_t key = idx->buckets[i].trigram_key;
-        size_t bucket_idx = hash_trigram_key(key, new_num_buckets);
-        while (new_buckets[bucket_idx].capacity > 0u) {
-            bucket_idx = (bucket_idx + 1u) & (new_num_buckets - 1u);
-        }
-        new_buckets[bucket_idx] = idx->buckets[i];
+    size_t lists_bytes;
+    if (!checked_mul_size(new_num_buckets, sizeof(keystone_trigram_posting_list_t), &lists_bytes)) {
+        return KEYSTONE_TRIGRAM_EOVERFLOW;
     }
 
-    free(idx->buckets);
-    idx->buckets = new_buckets;
+    uint32_t* new_keys = (uint32_t*)malloc(keys_bytes);
+    if (!new_keys) return KEYSTONE_TRIGRAM_ENOMEM;
+    memset(new_keys, 0xFF, keys_bytes);
+
+    keystone_trigram_posting_list_t* new_lists =
+        (keystone_trigram_posting_list_t*)calloc(
+            new_num_buckets, sizeof(keystone_trigram_posting_list_t));
+    if (!new_lists) {
+        free(new_keys);
+        return KEYSTONE_TRIGRAM_ENOMEM;
+    }
+
+    for (size_t i = 0u; i < idx->num_buckets; i++) {
+        if (idx->bucket_keys[i] == TRIGRAM_KEY_EMPTY) continue;
+
+        uint32_t key = idx->bucket_keys[i];
+        size_t bucket_idx = hash_trigram_key(key, new_num_buckets);
+        while (new_keys[bucket_idx] != TRIGRAM_KEY_EMPTY) {
+            bucket_idx = (bucket_idx + 1u) & (new_num_buckets - 1u);
+        }
+        new_keys[bucket_idx] = key;
+        new_lists[bucket_idx] = idx->bucket_lists[i];
+    }
+
+    free(idx->bucket_keys);
+    free(idx->bucket_lists);
+    idx->bucket_keys = new_keys;
+    idx->bucket_lists = new_lists;
     idx->num_buckets = new_num_buckets;
     return KEYSTONE_TRIGRAM_OK;
 }
@@ -175,9 +198,46 @@ keystone_trigram_index_t* keystone_trigram_index_create(size_t initial_doc_capac
     if (!idx) return NULL;
 
     idx->num_buckets = TRIGRAM_INITIAL_BUCKETS;
-    idx->buckets = (keystone_trigram_posting_list_t*)calloc(
+    size_t keys_bytes;
+    if (!checked_mul_size(idx->num_buckets, sizeof(uint32_t), &keys_bytes)) {
+        free(idx);
+        return NULL;
+    }
+    idx->bucket_keys = (uint32_t*)malloc(keys_bytes);
+    if (!idx->bucket_keys) {
+        free(idx);
+        return NULL;
+    }
+    memset(idx->bucket_keys, 0xFF, keys_bytes);
+
+    size_t lists_bytes;
+    if (!checked_mul_size(idx->num_buckets, sizeof(keystone_trigram_posting_list_t), &lists_bytes)) {
+        free(idx->bucket_keys);
+        free(idx);
+        return NULL;
+    }
+    idx->bucket_lists = (keystone_trigram_posting_list_t*)calloc(
         idx->num_buckets, sizeof(keystone_trigram_posting_list_t));
-    if (!idx->buckets) {
+    if (!idx->bucket_lists) {
+        free(idx->bucket_keys);
+        free(idx);
+        return NULL;
+    }
+
+    idx->doc_seen = (unsigned char*)calloc(TRIGRAM_BITMAP_BYTES, 1);
+    if (!idx->doc_seen) {
+        free(idx->bucket_lists);
+        free(idx->bucket_keys);
+        free(idx);
+        return NULL;
+    }
+    idx->doc_seen_touched_cap = 4096u;
+    idx->doc_seen_touched =
+        (size_t*)malloc(idx->doc_seen_touched_cap * sizeof(size_t));
+    if (!idx->doc_seen_touched) {
+        free(idx->doc_seen);
+        free(idx->bucket_lists);
+        free(idx->bucket_keys);
         free(idx);
         return NULL;
     }
@@ -186,7 +246,10 @@ keystone_trigram_index_t* keystone_trigram_index_create(size_t initial_doc_capac
     idx->docs = (keystone_trigram_doc_t*)calloc(
         idx->doc_capacity, sizeof(keystone_trigram_doc_t));
     if (!idx->docs) {
-        free(idx->buckets);
+        free(idx->doc_seen_touched);
+        free(idx->doc_seen);
+        free(idx->bucket_lists);
+        free(idx->bucket_keys);
         free(idx);
         return NULL;
     }
@@ -198,12 +261,18 @@ keystone_trigram_index_t* keystone_trigram_index_create(size_t initial_doc_capac
 void keystone_trigram_index_destroy(keystone_trigram_index_t* idx) {
     if (!idx) return;
 
-    if (idx->buckets) {
+    if (idx->bucket_lists) {
         for (size_t i = 0u; i < idx->num_buckets; i++) {
-            free(idx->buckets[i].doc_ids);
+            if (idx->bucket_keys[i] != TRIGRAM_KEY_EMPTY) {
+                free(idx->bucket_lists[i].doc_ids);
+            }
         }
-        free(idx->buckets);
+        free(idx->bucket_lists);
     }
+    free(idx->bucket_keys);
+
+    free(idx->doc_seen_touched);
+    free(idx->doc_seen);
 
     if (idx->docs) {
         for (size_t i = 0u; i < idx->doc_count; i++) {
@@ -223,6 +292,26 @@ void keystone_trigram_index_destroy(keystone_trigram_index_t* idx) {
     free(idx);
 }
 
+#ifdef __SSE4_2__
+/* Each output dword holds a trigram key packed little-endian as
+ * (p[i+2] | p[i+1]<<8 | p[i]<<16); 0x80 lanes zero the high byte so
+ * pshufb produces a clean 24-bit key. Four shuffles over a single
+ * 16-byte load yield the 14 trigrams whose three-byte windows fit
+ * entirely within that load (positions 0..13). */
+static const unsigned char KEYSHUF_M0[16] = {2,1,0,0x80, 3,2,1,0x80, 4,3,2,0x80, 5,4,3,0x80};
+static const unsigned char KEYSHUF_M1[16] = {6,5,4,0x80, 7,6,5,0x80, 8,7,6,0x80, 9,8,7,0x80};
+static const unsigned char KEYSHUF_M2[16] = {10,9,8,0x80, 11,10,9,0x80, 12,11,10,0x80, 13,12,11,0x80};
+static const unsigned char KEYSHUF_M3[16] = {14,13,12,0x80, 15,14,13,0x80, 0x80,0x80,0x80,0x80, 0x80,0x80,0x80,0x80};
+
+static inline void keystone_extract_trigrams16(const unsigned char* p, uint32_t* out) {
+    __m128i v = _mm_loadu_si128((const __m128i*)p);
+    _mm_storeu_si128((__m128i*)(out + 0),  _mm_shuffle_epi8(v, _mm_loadu_si128((const __m128i*)KEYSHUF_M0)));
+    _mm_storeu_si128((__m128i*)(out + 4),  _mm_shuffle_epi8(v, _mm_loadu_si128((const __m128i*)KEYSHUF_M1)));
+    _mm_storeu_si128((__m128i*)(out + 8),  _mm_shuffle_epi8(v, _mm_loadu_si128((const __m128i*)KEYSHUF_M2)));
+    _mm_storeu_si128((__m128i*)(out + 12), _mm_shuffle_epi8(v, _mm_loadu_si128((const __m128i*)KEYSHUF_M3)));
+}
+#endif
+
 size_t keystone_trigram_extract(
     const char* pattern,
     size_t pattern_len,
@@ -233,44 +322,38 @@ size_t keystone_trigram_extract(
 
     const unsigned char* p = (const unsigned char*)pattern;
     size_t extracted = 0u;
+    size_t i = 0u;
 
-    /* Heap-allocated bitmap dedup: O(n) single pass instead of O(n²).
-     * 2MB covers all 16M possible 24-bit trigrams. */
-    unsigned char* bitmap = (unsigned char*)calloc(TRIGRAM_BITMAP_BYTES, 1);
-    if (!bitmap) {
-        /* Fallback: original O(n²) scan if allocation fails */
-        for (size_t i = 0u; i <= pattern_len - 3u; i++) {
-            uint32_t key = ((uint32_t)p[i] << 16) |
-                           ((uint32_t)p[i + 1u] << 8) |
-                           (uint32_t)p[i + 2u];
+#ifdef __SSE4_2__
+    while (i + 16u <= pattern_len && extracted < max_trigrams) {
+        uint32_t keys[16];
+        keystone_extract_trigrams16(p + i, keys);
+        for (int k = 0; k < 14 && extracted < max_trigrams; k++) {
+            uint32_t key = keys[k];
             bool dup = false;
             for (size_t j = 0u; j < extracted; j++) {
                 if (out_trigrams[j] == key) { dup = true; break; }
             }
             if (!dup) {
                 out_trigrams[extracted++] = key;
-                if (extracted >= max_trigrams) break;
             }
         }
-        return extracted;
+        i += 14u;
     }
-
-    for (size_t i = 0u; i <= pattern_len - 3u; i++) {
+#endif
+    for (; i <= pattern_len - 3u && extracted < max_trigrams; i++) {
         uint32_t key = ((uint32_t)p[i] << 16) |
                        ((uint32_t)p[i + 1u] << 8) |
                        (uint32_t)p[i + 2u];
-
-        size_t byte_idx = key >> 3;
-        unsigned char bit_mask = (unsigned char)(1u << (key & 7u));
-
-        if (!(bitmap[byte_idx] & bit_mask)) {
-            bitmap[byte_idx] |= bit_mask;
+        bool dup = false;
+        for (size_t j = 0u; j < extracted; j++) {
+            if (out_trigrams[j] == key) { dup = true; break; }
+        }
+        if (!dup) {
             out_trigrams[extracted++] = key;
-            if (extracted >= max_trigrams) break;
         }
     }
 
-    free(bitmap);
     return extracted;
 }
 
@@ -296,8 +379,8 @@ static keystone_trigram_posting_list_t* find_or_create_posting_list(
     size_t mask = idx->num_buckets - 1u;
     size_t original = bucket_idx;
 
-    while (idx->buckets[bucket_idx].capacity > 0u &&
-           idx->buckets[bucket_idx].trigram_key != key) {
+    while (idx->bucket_keys[bucket_idx] != TRIGRAM_KEY_EMPTY &&
+           idx->bucket_keys[bucket_idx] != key) {
         bucket_idx = (bucket_idx + 1u) & mask;
         if (bucket_idx == original) {
             poison_index(idx, KEYSTONE_TRIGRAM_ESTATE);
@@ -305,8 +388,8 @@ static keystone_trigram_posting_list_t* find_or_create_posting_list(
         }
     }
 
-    keystone_trigram_posting_list_t* plist = &idx->buckets[bucket_idx];
-    if (plist->capacity == 0u) {
+    keystone_trigram_posting_list_t* plist = &idx->bucket_lists[bucket_idx];
+    if (idx->bucket_keys[bucket_idx] == TRIGRAM_KEY_EMPTY) {
         size_t bytes;
         if (!checked_mul_size(TRIGRAM_INITIAL_POSTING_CAPACITY, sizeof(uint32_t), &bytes)) {
             poison_index(idx, KEYSTONE_TRIGRAM_EOVERFLOW);
@@ -318,10 +401,10 @@ static keystone_trigram_posting_list_t* find_or_create_posting_list(
             return NULL;
         }
 
-        plist->trigram_key = key;
         plist->doc_ids = ids;
         plist->count = 0u;
         plist->capacity = TRIGRAM_INITIAL_POSTING_CAPACITY;
+        idx->bucket_keys[bucket_idx] = key;
         idx->unique_trigrams++;
     }
 
@@ -389,6 +472,51 @@ static int ensure_doc_capacity(keystone_trigram_index_t* idx) {
     return KEYSTONE_TRIGRAM_OK;
 }
 
+static void clear_doc_seen(keystone_trigram_index_t* idx) {
+    for (size_t t = 0u; t < idx->doc_seen_touched_count; t++) {
+        idx->doc_seen[idx->doc_seen_touched[t]] = 0u;
+    }
+    idx->doc_seen_touched_count = 0u;
+}
+
+/* Per-trigram dedup + posting-list append. Factored so both the SIMD
+ * batch path and the scalar tail share one copy of the bitmap logic.
+ * `continue` inside the do/while exits the block and advances the
+ * enclosing for-loop to the next trigram. */
+#define KEYSTONE_EMIT_TRIGRAM(KEY) do { \
+    size_t byte_idx = (KEY) >> 3; \
+    unsigned char bit_mask = (unsigned char)(1u << ((KEY) & 7u)); \
+    unsigned char old = idx->doc_seen[byte_idx]; \
+    if (old & bit_mask) continue; \
+    if (old == 0u) { \
+        if (idx->doc_seen_touched_count >= idx->doc_seen_touched_cap) { \
+            size_t new_cap = idx->doc_seen_touched_cap * 2u; \
+            size_t new_bytes; \
+            if (!checked_mul_size(new_cap, sizeof(size_t), &new_bytes)) { \
+                rc = KEYSTONE_TRIGRAM_EOVERFLOW; \
+                goto fail_prepared_doc; \
+            } \
+            size_t* new_touched = \
+                (size_t*)realloc(idx->doc_seen_touched, new_bytes); \
+            if (!new_touched) { \
+                rc = KEYSTONE_TRIGRAM_ENOMEM; \
+                goto fail_prepared_doc; \
+            } \
+            idx->doc_seen_touched = new_touched; \
+            idx->doc_seen_touched_cap = new_cap; \
+        } \
+        idx->doc_seen_touched[idx->doc_seen_touched_count++] = byte_idx; \
+    } \
+    idx->doc_seen[byte_idx] = old | bit_mask; \
+    keystone_trigram_posting_list_t* plist = find_or_create_posting_list(idx, (KEY)); \
+    if (!plist) { \
+        rc = idx->failure_code ? idx->failure_code : KEYSTONE_TRIGRAM_ESTATE; \
+        goto fail_prepared_doc; \
+    } \
+    rc = add_doc_to_posting_list(idx, plist, doc_id); \
+    if (rc != KEYSTONE_TRIGRAM_OK) goto fail_prepared_doc; \
+} while (0)
+
 static int add_document_internal(
     keystone_trigram_index_t* idx,
     const char* name,
@@ -432,19 +560,26 @@ static int add_document_internal(
 
     if (text_len >= 3u) {
         const unsigned char* p = (const unsigned char*)text;
-        for (size_t i = 0u; i <= text_len - 3u; i++) {
+        size_t i = 0u;
+#ifdef __SSE4_2__
+        while (i + 16u <= text_len) {
+            uint32_t keys[16];
+            keystone_extract_trigrams16(p + i, keys);
+            for (int k = 0; k < 14; k++) {
+                KEYSTONE_EMIT_TRIGRAM(keys[k]);
+            }
+            i += 14u;
+        }
+#endif
+        for (; i <= text_len - 3u; i++) {
             uint32_t key = ((uint32_t)p[i] << 16) |
                            ((uint32_t)p[i + 1u] << 8) |
                            (uint32_t)p[i + 2u];
-            keystone_trigram_posting_list_t* plist = find_or_create_posting_list(idx, key);
-            if (!plist) {
-                rc = idx->failure_code ? idx->failure_code : KEYSTONE_TRIGRAM_ESTATE;
-                goto fail_prepared_doc;
-            }
-            rc = add_doc_to_posting_list(idx, plist, doc_id);
-            if (rc != KEYSTONE_TRIGRAM_OK) goto fail_prepared_doc;
+            KEYSTONE_EMIT_TRIGRAM(key);
         }
     }
+
+    clear_doc_seen(idx);
 
     keystone_trigram_doc_t* doc = &idx->docs[idx->doc_count];
     doc->id = doc_id;
@@ -467,6 +602,7 @@ static int add_document_internal(
     return KEYSTONE_TRIGRAM_OK;
 
 fail_prepared_doc:
+    clear_doc_seen(idx);
     if (content_copy) {
         secure_zero(content_copy, text_len);
         free(content_copy);
@@ -504,29 +640,17 @@ static int compare_uint32(const void* a, const void* b) {
     return (u1 > u2) - (u1 < u2);
 }
 
-/* Counting sort for uint32 posting lists. O(n + k) where k = doc_count.
- * Faster than qsort's O(n log n) when doc_count is bounded and known. */
-static void counting_sort_doc_ids(uint32_t* arr, size_t count, size_t max_val) {
+/* Counting sort using a caller-provided shared counts array (zeroed and
+ * reused across posting lists to eliminate per-list allocation churn). */
+static void counting_sort_doc_ids(
+    uint32_t* arr, size_t count, size_t max_val, size_t* counts
+) {
     if (count <= 1u) return;
-    if (max_val == 0u) max_val = count;
-
-    /* Use counting sort for small ranges, qsort for large */
-    if (max_val <= (1u << 20)) {
-        /* Counting sort */
-        size_t* counts = (size_t*)calloc(max_val + 1u, sizeof(size_t));
-        if (!counts) {
-            /* Fallback to qsort if allocation fails */
-            qsort(arr, count, sizeof(uint32_t), compare_uint32);
-            return;
-        }
-        for (size_t i = 0u; i < count; i++) counts[arr[i]]++;
-        size_t pos = 0u;
-        for (size_t v = 0u; v <= max_val; v++) {
-            for (size_t c = 0u; c < counts[v]; c++) arr[pos++] = (uint32_t)v;
-        }
-        free(counts);
-    } else {
-        qsort(arr, count, sizeof(uint32_t), compare_uint32);
+    memset(counts, 0, (max_val + 1u) * sizeof(size_t));
+    for (size_t i = 0u; i < count; i++) counts[arr[i]]++;
+    size_t pos = 0u;
+    for (size_t v = 0u; v <= max_val; v++) {
+        for (size_t c = 0u; c < counts[v]; c++) arr[pos++] = (uint32_t)v;
     }
 }
 
@@ -535,19 +659,37 @@ int keystone_trigram_index_finalize(keystone_trigram_index_t* idx) {
     if (idx->failed) return idx->failure_code ? idx->failure_code : KEYSTONE_TRIGRAM_ESTATE;
     if (idx->is_finalized) return KEYSTONE_TRIGRAM_OK;
 
+    size_t dc = idx->doc_count;
+    size_t* counts = NULL;
+    if (dc > 0u && dc < (1u << 20)) {
+        size_t counts_bytes;
+        if (checked_mul_size(dc + 1u, sizeof(size_t), &counts_bytes)) {
+            counts = (size_t*)malloc(counts_bytes);
+        }
+    }
+
     size_t total_postings = 0u;
     for (size_t i = 0u; i < idx->num_buckets; i++) {
-        keystone_trigram_posting_list_t* plist = &idx->buckets[i];
+        if (idx->bucket_keys[i] == TRIGRAM_KEY_EMPTY) continue;
+        keystone_trigram_posting_list_t* plist = &idx->bucket_lists[i];
         if (plist->count == 0u) continue;
         if (!plist->doc_ids || plist->count > plist->capacity) {
+            free(counts);
             return poison_index(idx, KEYSTONE_TRIGRAM_ESTATE);
         }
-        counting_sort_doc_ids(plist->doc_ids, plist->count, idx->doc_count);
+        if (counts) {
+            counting_sort_doc_ids(plist->doc_ids, plist->count, dc, counts);
+        } else {
+            qsort(plist->doc_ids, plist->count, sizeof(uint32_t), compare_uint32);
+        }
         if (plist->count > SIZE_MAX - total_postings) {
+            free(counts);
             return poison_index(idx, KEYSTONE_TRIGRAM_EOVERFLOW);
         }
         total_postings += plist->count;
     }
+
+    free(counts);
 
     idx->stats.unique_trigrams = idx->unique_trigrams;
     idx->stats.total_postings = total_postings;
@@ -559,15 +701,15 @@ static const keystone_trigram_posting_list_t* get_posting_list(
     const keystone_trigram_index_t* idx,
     uint32_t key
 ) {
-    if (!idx || !idx->buckets || idx->num_buckets == 0u) return NULL;
+    if (!idx || !idx->bucket_keys || idx->num_buckets == 0u) return NULL;
 
     size_t mask = idx->num_buckets - 1u;
     size_t bucket_idx = hash_trigram_key(key, idx->num_buckets);
     size_t original = bucket_idx;
 
-    while (idx->buckets[bucket_idx].capacity > 0u) {
-        if (idx->buckets[bucket_idx].trigram_key == key) {
-            return &idx->buckets[bucket_idx];
+    while (idx->bucket_keys[bucket_idx] != TRIGRAM_KEY_EMPTY) {
+        if (idx->bucket_keys[bucket_idx] == key) {
+            return &idx->bucket_lists[bucket_idx];
         }
         bucket_idx = (bucket_idx + 1u) & mask;
         if (bucket_idx == original) break;
@@ -579,6 +721,38 @@ static const keystone_trigram_posting_list_t* get_posting_list(
 size_t keystone_trigram_index_document_count(const keystone_trigram_index_t* idx) {
     return idx ? idx->doc_count : 0u;
 }
+
+#ifdef __SSE4_2__
+/* Unsigned lower_bound over arr[pos..cnt) for target, four uint32s at a
+ * time. Sign bits are flipped so the signed _mm_cmpgt_epi32 implements
+ * an unsigned comparison. Returns the first index >= target and sets
+ * *found if target is present at that index. */
+static inline size_t simd_lower_bound_u32(
+    const uint32_t* arr, size_t pos, size_t cnt, uint32_t target, int* found
+) {
+    const __m128i sign = _mm_set1_epi32((int)0x80000000u);
+    __m128i tgt = _mm_xor_si128(_mm_set1_epi32((int)target), sign);
+    size_t i = pos;
+    for (; i + 4u <= cnt; i += 4u) {
+        __m128i v = _mm_xor_si128(_mm_loadu_si128((const __m128i*)(arr + i)), sign);
+        __m128i eq = _mm_cmpeq_epi32(v, tgt);
+        __m128i ge = _mm_or_si128(eq, _mm_cmpgt_epi32(v, tgt));
+        unsigned int gm = (unsigned int)_mm_movemask_ps(_mm_castsi128_ps(ge));
+        if (gm) {
+            int bit = __builtin_ctz(gm);
+            unsigned int em = (unsigned int)_mm_movemask_ps(_mm_castsi128_ps(eq));
+            *found = (int)((em >> bit) & 1u);
+            return i + (size_t)bit;
+        }
+    }
+    for (; i < cnt; i++) {
+        if (arr[i] == target) { *found = 1; return i; }
+        if (arr[i] > target) { *found = 0; return i; }
+    }
+    *found = 0;
+    return cnt;
+}
+#endif
 
 size_t keystone_trigram_index_get_candidates(
     const keystone_trigram_index_t* idx,
@@ -643,6 +817,22 @@ size_t keystone_trigram_index_get_candidates(
             size_t cnt = plist->count;
             size_t pos = cursor[l];
 
+#ifdef __SSE4_2__
+            /* Small lists: a 4-way SIMD linear scan from the cursor beats
+             * the branchy gallop+binary search when the list is short. */
+            if (cnt < 64u) {
+                int found = 0;
+                size_t lo = simd_lower_bound_u32(arr, pos, cnt, doc_id, &found);
+                if (found) {
+                    cursor[l] = lo + 1u;
+                    continue;
+                }
+                cursor[l] = lo;
+                in_all = false;
+                break;
+            }
+#endif
+
             /* Skip forward: if we've already passed this position, gallop */
             if (pos < cnt && arr[pos] == doc_id) {
                 cursor[l] = pos + 1u;
@@ -691,9 +881,13 @@ size_t keystone_trigram_index_get_candidates(
 }
 
 /* SIMD-accelerated substring search.
- * Uses SSE4.2 PCMPESTRI to find first-byte candidates 16 at a time,
- * then memcmp to confirm full match. Falls back to byte-at-a-time
- * scan when SSE4.2 is unavailable. */
+ * For needles >= 16 bytes the first 16 bytes are compared directly with
+ * a single XMM compare, an extremely selective filter. For shorter
+ * needles the first and last byte are scanned simultaneously: a
+ * candidate position must match both the first byte (at offset 0) and
+ * the last byte (at offset needle_len-1), eliminating most false
+ * positives before memcmp touches the middle. Falls back to a
+ * byte-at-a-time scan when SSE4.2 is unavailable. */
 static const void* bounded_memmem(
     const void* haystack,
     size_t haystack_len,
@@ -707,33 +901,45 @@ static const void* bounded_memmem(
     size_t limit = haystack_len - needle_len;
 
     if (needle_len == 1u) {
-        /* Single-byte: use memchr which glibc already SIMD-optimizes */
         return memchr(haystack, n[0], haystack_len);
     }
 
 #if HAVE_SSE42
-    /* Load first byte into all 16 lanes of an XMM register */
     __m128i first_byte = _mm_set1_epi8((char)n[0]);
+    __m128i last_byte = _mm_set1_epi8((char)n[needle_len - 1u]);
+    __m128i n16 = (needle_len >= 16u)
+        ? _mm_loadu_si128((const __m128i*)n)
+        : _mm_setzero_si128();
     size_t i = 0u;
-    /* Process 16 bytes at a time with SSE4.2 PCMPESTRI */
     while (i + 16u <= limit) {
-        __m128i chunk = _mm_loadu_si128((const __m128i*)(h + i));
-        __m128i eq = _mm_cmpeq_epi8(chunk, first_byte);
-        unsigned int mask = (unsigned int)_mm_movemask_epi8(eq);
-
+        __m128i chunk_f = _mm_loadu_si128((const __m128i*)(h + i));
+        __m128i chunk_l = _mm_loadu_si128((const __m128i*)(h + i + needle_len - 1u));
+        unsigned int mask_f = (unsigned int)_mm_movemask_epi8(_mm_cmpeq_epi8(chunk_f, first_byte));
+        unsigned int mask_l = (unsigned int)_mm_movemask_epi8(_mm_cmpeq_epi8(chunk_l, last_byte));
+        unsigned int mask = mask_f & mask_l;
         while (mask) {
             int bit = __builtin_ctz(mask);
-            mask &= mask - 1; /* clear lowest set bit */
+            mask &= mask - 1;
             size_t pos = i + (size_t)bit;
-            if (pos <= limit && memcmp(h + pos, n, needle_len) == 0)
+            if (pos > limit) continue;
+#ifdef __SSE4_2__
+            if (needle_len >= 16u) {
+                __m128i h16 = _mm_loadu_si128((const __m128i*)(h + pos));
+                if ((unsigned int)_mm_movemask_epi8(_mm_cmpeq_epi8(h16, n16)) != 0xFFFFu)
+                    continue;
+                if (needle_len > 16u &&
+                    memcmp(h + pos + 16u, n + 16u, needle_len - 16u) != 0)
+                    continue;
+                return h + pos;
+            }
+#endif
+            if (memcmp(h + pos, n, needle_len) == 0)
                 return h + pos;
         }
         i += 16u;
     }
-    /* Scalar tail */
     for (; i <= limit; i++) {
 #else
-    /* No SSE4.2: full scalar scan */
     for (size_t i = 0u; i <= limit; i++) {
 #endif
         if (h[i] == n[0] && memcmp(h + i, n, needle_len) == 0)

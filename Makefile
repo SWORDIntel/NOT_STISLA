@@ -38,7 +38,7 @@ endif
 ifeq ($(KEYSTONE_ENABLE_FORTRAN),1)
     ifeq ($(shell command -v gfortran >/dev/null 2>&1 && echo yes),yes)
         FORTRAN_CFLAGS := -DKEYSTONE_ENABLE_FORTRAN
-        FORTRAN_LDFLAGS := -L./fortran -lkeystone_batch -Wl,-rpath,'$$ORIGIN/fortran'
+        FORTRAN_LDFLAGS := -L./fortran -lkeystone_batch -Wl,-rpath,'$$ORIGIN/fortran:$$ORIGIN/../fortran:$$ORIGIN/../lib'
         CFLAGS  += $(FORTRAN_CFLAGS)
         LDFLAGS += $(FORTRAN_LDFLAGS)
     else
@@ -47,7 +47,7 @@ ifeq ($(KEYSTONE_ENABLE_FORTRAN),1)
 else ifneq ($(KEYSTONE_ENABLE_FORTRAN),0)
     ifeq ($(shell command -v gfortran >/dev/null 2>&1 && echo yes),yes)
         FORTRAN_CFLAGS := -DKEYSTONE_ENABLE_FORTRAN
-        FORTRAN_LDFLAGS := -L./fortran -lkeystone_batch -Wl,-rpath,'$$ORIGIN/fortran'
+        FORTRAN_LDFLAGS := -L./fortran -lkeystone_batch -Wl,-rpath,'$$ORIGIN/fortran:$$ORIGIN/../fortran:$$ORIGIN/../lib'
         CFLAGS  += $(FORTRAN_CFLAGS)
         LDFLAGS += $(FORTRAN_LDFLAGS)
     endif
@@ -230,7 +230,7 @@ endif
 
 ifeq ($(FORTRAN_ENABLED),yes)
 all: fortran/libkeystone_batch.so
-libkeystone.so $(TEST_BIN) $(BENCH_BIN): fortran/libkeystone_batch.so | bin
+libkeystone.so $(TEST_BIN) $(BENCH_BIN): | fortran/libkeystone_batch.so bin
 endif
 
 # CUDA backend (optional)

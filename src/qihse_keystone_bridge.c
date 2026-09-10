@@ -246,19 +246,4 @@ int keystone_qihse_bridge_dispatch_credential_authenticated(
     return -1;
 }
 
-void keystone_qihse_bridge_set_principal(void* principal) {
-    (void)principal;
-}
-
-int keystone_qihse_bridge_dispatch_credential_authenticated(
-    const char* email,
-    const char* pass,
-    int semantic_class
-) {
-    (void)email;
-    (void)pass;
-    (void)semantic_class;
-    return -1;
-}
-
 #endif

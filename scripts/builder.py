@@ -598,7 +598,6 @@ def install_opt(dest: Path) -> None:
         (dest / sub).mkdir(parents=True, exist_ok=True)
 
     lib = ROOT / "libkeystone.so"
-    fortran_lib = ROOT / "fortran" / "libkeystone_batch.so"
 
     def safe_copy(src: Path, dst: Path) -> bool:
         try:
@@ -614,11 +613,20 @@ def install_opt(dest: Path) -> None:
             ok(f"libkeystone.so → {dest}/lib/")
         else:
             warn(f"Failed to copy libkeystone.so → {dest}/lib/")
-    if fortran_lib.exists():
-        if safe_copy(fortran_lib, dest / "lib" / "libkeystone_batch.so"):
-            ok(f"libkeystone_batch.so → {dest}/lib/")
-        else:
-            warn(f"Failed to copy libkeystone_batch.so → {dest}/lib/")
+
+    # Symlink /opt/keystone/lib → dest/lib
+    opt_lib = Path("/opt/keystone/lib")
+    try:
+        opt_lib.parent.mkdir(parents=True, exist_ok=True)
+        if opt_lib.exists() and opt_lib.is_symlink():
+            opt_lib.unlink()
+        elif opt_lib.exists() and not opt_lib.is_symlink():
+            shutil.rmtree(opt_lib)
+        if not opt_lib.exists():
+            opt_lib.symlink_to(dest / "lib")
+            ok(f"/opt/keystone/lib → {dest}/lib/ (symlink)")
+    except (OSError, PermissionError):
+        warn(f"Could not create /opt/keystone/lib symlink")
 
     # Binaries
     bin_count = 0

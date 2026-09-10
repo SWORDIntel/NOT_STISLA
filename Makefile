@@ -36,21 +36,20 @@ else ifneq ($(KEYSTONE_ENABLE_TAR_ZST),0)
 endif
 
 # Optional Fortran backend (default: enabled if gfortran is available)
+# Compiled as an object file and linked directly into libkeystone.so
 ifeq ($(KEYSTONE_ENABLE_FORTRAN),1)
     ifeq ($(shell command -v gfortran >/dev/null 2>&1 && echo yes),yes)
         FORTRAN_CFLAGS := -DKEYSTONE_ENABLE_FORTRAN
-        FORTRAN_LDFLAGS := -L./fortran -lkeystone_batch -Wl,-rpath,'$$ORIGIN/fortran:$$ORIGIN/../fortran:$$ORIGIN/../lib'
         CFLAGS  += $(FORTRAN_CFLAGS)
-        LDFLAGS += $(FORTRAN_LDFLAGS)
+        FORTRAN_OBJ := fortran/keystone_batch.o
     else
         $(error KEYSTONE_ENABLE_FORTRAN=1 requires gfortran)
     endif
 else ifneq ($(KEYSTONE_ENABLE_FORTRAN),0)
     ifeq ($(shell command -v gfortran >/dev/null 2>&1 && echo yes),yes)
         FORTRAN_CFLAGS := -DKEYSTONE_ENABLE_FORTRAN
-        FORTRAN_LDFLAGS := -L./fortran -lkeystone_batch -Wl,-rpath,'$$ORIGIN/fortran:$$ORIGIN/../fortran:$$ORIGIN/../lib'
         CFLAGS  += $(FORTRAN_CFLAGS)
-        LDFLAGS += $(FORTRAN_LDFLAGS)
+        FORTRAN_OBJ := fortran/keystone_batch.o
     endif
 endif
 
@@ -139,8 +138,12 @@ all: lib tests benchmarks
 
 lib: libkeystone.so
 
-libkeystone.so: $(OBJS)
+libkeystone.so: $(OBJS) $(FORTRAN_OBJ)
 	$(CC) -shared -fPIC -o $@ $^ $(LDFLAGS)
+
+fortran/keystone_batch.o: fortran/keystone_batch.f90
+	mkdir -p fortran
+	gfortran -O3 -fPIC -fopenmp -Jfortran -c $< -o $@
 
 tests: $(TEST_BIN)
 
@@ -215,11 +218,7 @@ benchmarks/performance_proof: $(OBJS) benchmarks/performance_proof.o benchmarks/
 benchmarks/trigram_benchmark: $(OBJS) benchmarks/trigram_benchmark.o
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-# Fortran backend (optional)
-fortran/libkeystone_batch.so: fortran/keystone_batch.f90
-	mkdir -p fortran
-	gfortran -O3 -shared -fPIC -fopenmp -Jfortran $< -o $@
-
+# Fortran backend (optional) — compiled into libkeystone.so directly
 FORTRAN_ENABLED := no
 ifeq ($(KEYSTONE_ENABLE_FORTRAN),1)
 FORTRAN_ENABLED := yes
@@ -227,11 +226,6 @@ else ifneq ($(KEYSTONE_ENABLE_FORTRAN),0)
 ifeq ($(shell command -v gfortran >/dev/null 2>&1 && echo yes),yes)
 FORTRAN_ENABLED := yes
 endif
-endif
-
-ifeq ($(FORTRAN_ENABLED),yes)
-all: fortran/libkeystone_batch.so
-libkeystone.so $(TEST_BIN) $(BENCH_BIN): | fortran/libkeystone_batch.so bin
 endif
 
 # CUDA backend (optional)
@@ -259,5 +253,5 @@ clean:
 	rm -f $(OBJS) tests/*.o benchmarks/*.o libkeystone.so
 	rm -rf bin
 	rm -f scripts/compare_search_auto
-	rm -f fortran/libkeystone_batch.so fortran/*.mod
+	rm -f fortran/keystone_batch.o fortran/*.mod fortran/libkeystone_batch.so
 	rm -f cuda/libkeystone_cuda.so
